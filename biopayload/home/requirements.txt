@@ -1,0 +1,10 @@
+# BioPayload Ground Station - Python Dependencies
+
+# Serial communication
+pyserial>=3.5
+
+# Testing
+pytest>=8.0
+
+# Note: tkinter is part of the Python standard library
+# and does not need to be installed via pip.
