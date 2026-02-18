@@ -1,0 +1,73 @@
+digraph BioPayloadStateMachine {
+    // Graph settings
+    rankdir=TB;
+    bgcolor="white";
+    fontname="Helvetica";
+    node [fontname="Helvetica", fontsize=11];
+    edge [fontname="Helvetica", fontsize=9];
+    
+    // Title
+    labelloc="t";
+    label="BioPayload Nano State Machine";
+    fontsize=14;
+    
+    // Start point
+    start [shape=point, width=0.2, color=black];
+    
+    // States
+    IDLE [
+        label="IDLE\n───────\nAwaiting START",
+        shape=box, style="rounded,filled",
+        fillcolor="#90EE90", color="#228B22", penwidth=2
+    ];
+    
+    PRIMING [
+        label="PRIMING\n───────\nOne-time pump run\nClear air from lines",
+        shape=box, style="rounded,filled",
+        fillcolor="#DDA0DD", color="#8B008B", penwidth=2
+    ];
+    
+    ACTIVE [
+        label="ACTIVE\n───────\nMaintain temperature\nDispense media (scheduled)\nWait for scan interval",
+        shape=box, style="rounded,filled",
+        fillcolor="#98FB98", color="#228B22", penwidth=2
+    ];
+    
+    SCANNING [
+        label="SCANNING\n───────\n1. Home rail\n2. Loop 3×4 wells\n   LED → Sensor → Log",
+        shape=box, style="rounded,filled",
+        fillcolor="#FFD700", color="#FF8C00", penwidth=2
+    ];
+    
+    DONE [
+        label="DONE\n───────\nExperiment complete",
+        shape=box, style="rounded,filled",
+        fillcolor="#87CEEB", color="#4169E1", penwidth=2
+    ];
+    
+    ERROR [
+        label="ERROR\n───────\nFault detected\nSafe state",
+        shape=box, style="rounded,filled",
+        fillcolor="#FF6B6B", color="#DC143C", penwidth=2
+    ];
+    
+    // Normal flow
+    start -> IDLE [label="Boot"];
+    IDLE -> PRIMING [label="START", color="#8B008B", penwidth=1.5];
+    PRIMING -> ACTIVE [label="Pump done", color="#228B22", penwidth=1.5];
+    ACTIVE -> SCANNING [label="Interval elapsed", color="#FF8C00", penwidth=1.5];
+    SCANNING -> ACTIVE [label="All wells read", color="#228B22", penwidth=1.5];
+    ACTIVE -> DONE [label="Duration complete", color="#4169E1", penwidth=1.5];
+    DONE -> IDLE [label="Auto", color="#228B22", penwidth=1.5];
+    
+    // Abort paths
+    PRIMING -> IDLE [label="ABORT", color="#DC143C", style=dashed];
+    ACTIVE -> IDLE [label="ABORT", color="#DC143C", style=dashed];
+    SCANNING -> IDLE [label="ABORT", color="#DC143C", style=dashed];
+    
+    // Error paths
+    PRIMING -> ERROR [label="Fault", color="#DC143C", style=dotted];
+    ACTIVE -> ERROR [label="Fault", color="#DC143C", style=dotted];
+    SCANNING -> ERROR [label="Fault", color="#DC143C", style=dotted];
+    ERROR -> IDLE [label="Recovery", color="#228B22", style=dashed];
+}

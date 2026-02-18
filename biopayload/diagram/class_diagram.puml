@@ -1,0 +1,236 @@
+@startuml BioPayloadClassDiagram
+
+' ============================================================================
+' BioPayload Class Diagram
+' Style matching comm_protocol.dot and firmware_flow.dot
+' ============================================================================
+
+skinparam backgroundColor white
+skinparam defaultFontName Helvetica
+skinparam defaultFontSize 11
+
+' Class styling
+skinparam class {
+    BackgroundColor white
+    BorderColor #228B22
+    ArrowColor #4169E1
+    FontName Helvetica
+}
+
+skinparam package {
+    BackgroundColor #F8F8F8
+    BorderColor #4169E1
+    FontName Helvetica
+    FontStyle bold
+}
+
+skinparam stereotype {
+    CBackgroundColor #E6F3FF
+}
+
+' ============================================================================
+' GUI Package (Python)
+' ============================================================================
+
+package "GUI (Python)" #E6F3FF {
+    
+    class ExperimentConfig <<dataclass>> #white {
+        + run_id : str
+        + sample_rate_ms : int
+        + num_challenges : int
+        + target_temp_c : float
+        --
+        + validate() : tuple[bool, str]
+    }
+    
+    interface PayloadInterface <<interface>> #FFFACD {
+        + send_command(command: str, payload: dict)
+        + connect() : bool
+        + disconnect()
+    }
+    
+    class SimulatedPayload #DDA0DD {
+        - on_message : Callback
+        - state : str
+        - config : ExperimentConfig
+        - running : bool
+        - current_temp : float
+        - challenge_index : int
+        --
+        + send_command(command: str, payload: dict)
+        - _start_experiment()
+        - _stop_experiment()
+        - _experiment_loop()
+    }
+    
+    class SerialPayload #90EE90 {
+        - port : str
+        - baudrate : int
+        - on_message : Callback
+        - on_raw_message : Callback
+        - serial : Serial
+        - running : bool
+        --
+        + connect() : bool
+        + disconnect()
+        + send_command(command: str, payload: dict)
+        - _read_loop()
+        - _parse_message(line: str)
+    }
+    
+    class BioPayloadApp #87CEEB {
+        - root : Tk
+        - connected : bool
+        - payload : SerialPayload
+        - current_state : str
+        - scheduled_time : datetime
+        --
+        + __init__(root: Tk)
+        - _build_ui()
+        - _toggle_connection()
+        - _start_experiment()
+        - _abort_experiment()
+        - _schedule_experiment()
+        - _on_payload_message(msg_type, data)
+        - _update_telemetry(data)
+        - _log_event(message, level)
+    }
+    
+}
+
+' ============================================================================
+' Firmware Package (Arduino Nano)
+' ============================================================================
+
+package "Firmware (Arduino Nano)" #F0FFF0 {
+    
+    enum State #FFD700 {
+        IDLE
+        PRIMING
+        ACTIVE
+        SCANNING
+        DONE
+        ERROR
+    }
+    
+    class StateMachine <<controller>> #98FB98 {
+        - currentState : State
+        - config : ConfigData
+        --
+        + processCommand(cmd: String)
+        + transitionTo(newState: State)
+        + getCurrentState() : State
+    }
+    
+    class SerialProtocol <<boundary>> #90EE90 {
+        - inputBuffer : String
+        --
+        + setup()
+        + loop()
+        + processCommand(cmd: String)
+        + sendACK(command: String)
+        + sendState(state: String)
+        + sendTelemetry(data: JSON)
+        + sendError(code: String, message: String)
+    }
+    
+    class SDLogger <<utility>> #87CEEB {
+        - SD_CS_PIN : int
+        - sdCardPresent : bool
+        --
+        + checkSDCard() : bool
+        + writeData(filename: String, data: String)
+        + readData(filename: String) : String
+    }
+    
+    class HardwareControl <<boundary>> #DDA0DD {
+        - LED_PIN : int
+        --
+        + blinkLED(interval: int, count: int)
+        + controlPump(active: bool)
+        + controlHeater(temp: float)
+        + readSensor(wellId: int) : float
+        + moveStepper(position: int)
+    }
+    
+}
+
+' ============================================================================
+' Communication Protocol (Messages)
+' ============================================================================
+
+package "Communication Protocol" #FFFACD {
+    
+    class Command <<message>> #white {
+        HELLO
+        SET_CONFIG
+        START
+        ABORT
+        PING
+        SD_STATUS
+    }
+    
+    class Response <<message>> #white {
+        ACK
+        STATE
+        TELEM
+        RESULT
+        ERR
+    }
+    
+}
+
+' ============================================================================
+' Relationships
+' ============================================================================
+
+' GUI internal relationships
+BioPayloadApp "1" *-- "0..1" SerialPayload : uses >
+BioPayloadApp "1" *-- "0..1" SimulatedPayload : uses (testing) >
+BioPayloadApp ..> ExperimentConfig : creates >
+SerialPayload ..|> PayloadInterface
+SimulatedPayload ..|> PayloadInterface
+SimulatedPayload o-- ExperimentConfig
+
+' Firmware internal relationships
+StateMachine *-- State
+SerialProtocol --> StateMachine : triggers >
+StateMachine --> HardwareControl : controls >
+StateMachine --> SDLogger : logs to >
+
+' Cross-system communication
+SerialPayload ..> Command : sends >
+SerialPayload ..> Response : receives >
+SerialProtocol ..> Command : receives >
+SerialProtocol ..> Response : sends >
+
+' ============================================================================
+' Notes
+' ============================================================================
+
+note top of BioPayloadApp
+  Main GUI Application
+  ───────────────────
+  • Tkinter-based interface
+  • Real-time telemetry display
+  • Experiment scheduling
+end note
+
+note top of StateMachine
+  State Flow
+  ──────────
+  IDLE → PRIMING → ACTIVE
+    ↓         ↓       ↓
+  SCANNING ←──┘       │
+    ↓                 │
+  DONE ←──────────────┘
+end note
+
+note bottom of Command
+  Protocol Format
+  ───────────────
+  TX: "COMMAND [JSON]\\n"
+  RX: "TYPE [JSON]\\n"
+end note
+
+@enduml

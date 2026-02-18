@@ -1,0 +1,152 @@
+digraph CommProtocol {
+    rankdir=LR;
+    bgcolor="white";
+    fontname="Helvetica";
+    node [fontname="Helvetica", fontsize=10];
+    edge [fontname="Helvetica", fontsize=9];
+    
+    labelloc="t";
+    label="BioPayload: GUI ↔ Firmware Communication";
+    fontsize=14;
+    
+    // GUI side
+    subgraph cluster_gui {
+        label="GUI (Python)";
+        labeljust="c";
+        style=filled;
+        fillcolor="#E6F3FF";
+        color="#4169E1";
+        penwidth=2;
+        
+        gui [
+            label=<
+            <TABLE BORDER="0" CELLBORDER="0" CELLSPACING="8">
+            <TR><TD><B>Operator Interface</B></TD></TR>
+            <TR><TD>─────────────</TD></TR>
+            <TR><TD ALIGN="LEFT">• Send commands</TD></TR>
+            <TR><TD ALIGN="LEFT">• Display state</TD></TR>
+            <TR><TD ALIGN="LEFT">• Log telemetry</TD></TR>
+            </TABLE>
+            >,
+            shape=box, style="rounded,filled", fillcolor="white"
+        ];
+    }
+    
+    // Nano side with states
+    subgraph cluster_nano {
+        label="Nano (Firmware)";
+        labeljust="c";
+        style=filled;
+        fillcolor="#F0FFF0";
+        color="#228B22";
+        penwidth=2;
+        
+        idle [label="IDLE", shape=box, style="rounded,filled", fillcolor="#90EE90", width=1.5];
+        priming [label="PRIMING", shape=box, style="rounded,filled", fillcolor="#DDA0DD", width=1.5];
+        active [label="ACTIVE", shape=box, style="rounded,filled", fillcolor="#98FB98", width=1.5];
+        scanning [label="SCANNING", shape=box, style="rounded,filled", fillcolor="#FFD700", width=1.5];
+        done [label="DONE", shape=box, style="rounded,filled", fillcolor="#87CEEB", width=1.5];
+        error [label="ERROR", shape=box, style="rounded,filled", fillcolor="#FF6B6B", width=1.5];
+    }
+    
+    // GUI → IDLE
+    gui -> idle [
+        label=<
+        <TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0">
+        <TR><TD><B>←</B> HELLO</TD></TR>
+        <TR><TD><B>←</B> SET_CONFIG {json}</TD></TR>
+        <TR><TD><B>←</B> SD_STATUS</TD></TR>
+        <TR><TD><B>←</B> START</TD></TR>
+        </TABLE>
+        >,
+        color="#4169E1", penwidth=1.5
+    ];
+    
+    // IDLE → GUI
+    idle -> gui [
+        label=<
+        <TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0">
+        <TR><TD><B>→</B> ACK HELLO</TD></TR>
+        <TR><TD><B>→</B> ACK SET_CONFIG</TD></TR>
+        <TR><TD><B>→</B> ACK SD_STATUS</TD></TR>
+        <TR><TD><B>→</B> ACK START</TD></TR>
+        </TABLE>
+        >,
+        color="#228B22", penwidth=1.5
+    ];
+    
+    // GUI → PRIMING
+    gui -> priming [
+        label="← ABORT",
+        color="#DC143C", style=dashed
+    ];
+    
+    // PRIMING → GUI
+    priming -> gui [
+        label="→ STATE PRIMING",
+        color="#8B008B", penwidth=1.5
+    ];
+    
+    // GUI → ACTIVE
+    gui -> active [
+        label="← ABORT",
+        color="#DC143C", style=dashed
+    ];
+    
+    // ACTIVE → GUI
+    active -> gui [
+        label=<
+        <TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0">
+        <TR><TD><B>→</B> STATE ACTIVE</TD></TR>
+        <TR><TD><B>→</B> TELEM {temp, next_scan_s}</TD></TR>
+        </TABLE>
+        >,
+        color="#228B22", penwidth=1.5
+    ];
+    
+    // GUI → SCANNING
+    gui -> scanning [
+        label="← ABORT",
+        color="#DC143C", style=dashed
+    ];
+    
+    // SCANNING → GUI
+    scanning -> gui [
+        label=<
+        <TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0">
+        <TR><TD><B>→</B> STATE SCANNING</TD></TR>
+        <TR><TD><B>→</B> TELEM {well:1, sensor:...}</TD></TR>
+        <TR><TD><B>→</B> TELEM {well:2, sensor:...}</TD></TR>
+        </TABLE>
+        >,
+        color="#FF8C00", penwidth=1.5
+    ];
+    
+    // DONE → GUI (no input from GUI)
+    done -> gui [
+        label=<
+        <TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0">
+        <TR><TD><B>→</B> STATE DONE</TD></TR>
+        <TR><TD><B>→</B> STATE IDLE</TD></TR>
+        </TABLE>
+        >,
+        color="#4169E1", penwidth=1.5
+    ];
+    
+    // GUI → ERROR
+    gui -> error [
+        label="← ABORT (reset)",
+        color="#DC143C", style=dashed
+    ];
+    
+    // ERROR → GUI
+    error -> gui [
+        label=<
+        <TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0">
+        <TR><TD><B>→</B> STATE ERROR</TD></TR>
+        <TR><TD><B>→</B> ERR {code, message}</TD></TR>
+        </TABLE>
+        >,
+        color="#DC143C", penwidth=1.5
+    ];
+}
