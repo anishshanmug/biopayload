@@ -19,6 +19,9 @@
 #include <SPI.h>
 #include <SD.h>
 
+// Firmware version (reported to app on HELLO)
+#define FIRMWARE_VERSION "1.0.0"
+
 // Pin definitions
 const int SD_CS_PIN = 10;
 const int LED_PIN = LED_BUILTIN;  // Pin 13 on Nano
@@ -83,7 +86,8 @@ void processCommand(String cmd) {
     
     if (cmd == "HELLO") {
         digitalWrite(LED_PIN, HIGH);
-        Serial.println("ACK HELLO");
+        Serial.print("ACK HELLO ");
+        Serial.println(FIRMWARE_VERSION);
         delay(50);
         digitalWrite(LED_PIN, LOW);
     } 

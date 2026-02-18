@@ -259,8 +259,14 @@ class SerialPayload:
         msg_type = parts[0]
         
         if msg_type == "ACK":
-            cmd = parts[1] if len(parts) > 1 else ""
-            self.on_message("ACK", {"command": cmd})
+            rest = parts[1] if len(parts) > 1 else ""
+            # "HELLO 1.0.0" -> command=HELLO, firmware=1.0.0
+            if rest.startswith("HELLO "):
+                cmd = "HELLO"
+                firmware = rest[6:].strip() or "unknown"
+                self.on_message("ACK", {"command": cmd, "firmware": firmware})
+            else:
+                self.on_message("ACK", {"command": rest})
             
         elif msg_type == "ERR":
             try:
