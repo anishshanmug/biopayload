@@ -3,6 +3,9 @@
 # Serial communication
 pyserial>=3.5
 
+# Live graphing
+matplotlib>=3.8
+
 # Testing
 pytest>=8.0
 
