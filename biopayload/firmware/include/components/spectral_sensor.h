@@ -1,15 +1,3 @@
-/**
- * AS7341 10-channel spectral sensor component.
- *
- * Hardware: Adafruit AS7341 breakout over I2C.
- * Wiring:  VIN->5V, GND->GND, SDA->A4, SCL->A5
- * Address: 0x39 (default).
- *
- * Init note: I2C bus is set to 100 kHz with a settling delay before
- * talking to the sensor.  Without this, some Nano clones fail to
- * detect the chip (the original test failure).
- */
-
 #ifndef BIOPAYLOAD_SPECTRAL_SENSOR_H
 #define BIOPAYLOAD_SPECTRAL_SENSOR_H
 
@@ -38,10 +26,6 @@ class SpectralSensor {
 
   explicit SpectralSensor(uint8_t addr = DEFAULT_ADDR) : addr_(addr) {}
 
-  /**
-   * Call once from setup().  Initialises I2C at 100 kHz and configures
-   * integration time / gain.  Returns true if sensor found.
-   */
   bool begin() {
     Wire.begin();
     Wire.setClock(100000);
@@ -60,7 +44,6 @@ class SpectralSensor {
 
   bool isReady() const { return ready_; }
 
-  /** Read all 10 channels into a SpectralReading struct. */
   bool read(SpectralReading &r) {
     if (!ready_) return false;
     if (!as7341_.readAllChannels()) return false;
@@ -77,7 +60,6 @@ class SpectralSensor {
     return true;
   }
 
-  /** Print a reading to Serial as key:value pairs on one line. */
   static void printReading(const SpectralReading &r) {
     Serial.print("415nm:"); Serial.print(r.f1_415nm);
     Serial.print(" 445nm:"); Serial.print(r.f2_445nm);
@@ -101,6 +83,6 @@ class SpectralSensor {
   bool ready_ = false;
 };
 
-}  // namespace components
+}
 
-#endif  // BIOPAYLOAD_SPECTRAL_SENSOR_H
+#endif

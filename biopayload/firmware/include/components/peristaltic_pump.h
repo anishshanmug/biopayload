@@ -1,10 +1,3 @@
-/**
- * Peristaltic pump component
- *
- * Hardware: pump control pin wired to D6 (other side to GND).
- * Drive D6 HIGH to run the pump, LOW to stop.
- */
-
 #ifndef BIOPAYLOAD_PERISTALTIC_PUMP_H
 #define BIOPAYLOAD_PERISTALTIC_PUMP_H
 
@@ -27,7 +20,6 @@ class PeristalticPump {
 
   void off() { digitalWrite(pin_, LOW); }
 
-  // Blocking run (use only when you don't need serial/abort during run).
   void runForMs(unsigned long duration_ms) {
     if (duration_ms == 0) return;
     on();
@@ -35,7 +27,6 @@ class PeristalticPump {
     off();
   }
 
-  // Start a timed run; call update() every loop() for abort/timeout. 
   void startRunForMs(unsigned long duration_ms) {
     if (duration_ms == 0) return;
     abort_requested_ = false;
@@ -43,7 +34,6 @@ class PeristalticPump {
     on();
   }
 
-  // Call every loop(); turns pump off when time expires or abort() was called. 
   void update() {
     if (!running()) return;
     if (abort_requested_ || (long)(millis() - run_until_) >= 0) {
@@ -60,10 +50,10 @@ class PeristalticPump {
 
  private:
   int pin_;
-  unsigned long run_until_ = 0;   // 0 = idle
+  unsigned long run_until_ = 0;
   bool abort_requested_ = false;
 };
 
-}  
+}
 
-#endif 
+#endif

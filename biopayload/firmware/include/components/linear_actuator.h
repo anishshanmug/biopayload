@@ -1,21 +1,3 @@
-/**
- * Linear actuator component (stepper + TMC2208 or similar Step/Dir driver)
- *
- * Hardware: Haydon Kerk 21F4U-2.5-B27 Size 8 21mm (1.8° bipolar, non-captive)
- * Driver:   TMC2208 in STEP/DIR mode
- * Wiring:   STEP=D8 (PORTB0), DIR=D7 (PORTD7), EN=D9 (PORTB1)
- *           Enable is active-LOW on TMC2208.
- *
- * Uses direct port manipulation for reliable high-speed stepping.
- * Pin assignments are fixed to D8/D7/D9 (ATmega328P PORTB/PORTD).
- *
- * Motor specs:
- *   Rated voltage:    2.5 VDC
- *   Current/phase:    0.49 A
- *   Resistance/phase: 5.1 ohm
- *   Step angle:       1.8 deg (200 steps/rev)
- */
-
 #ifndef BIOPAYLOAD_LINEAR_ACTUATOR_H
 #define BIOPAYLOAD_LINEAR_ACTUATOR_H
 
@@ -25,13 +7,9 @@ namespace components {
 
 class LinearActuator {
  public:
-  // Fixed pin→port mapping for ATmega328P (Uno/Nano).
-  // Pin 8  = PORTB bit 0 (STEP)
-  // Pin 7  = PORTD bit 7 (DIR)
-  // Pin 9  = PORTB bit 1 (EN)
-  static const uint8_t STEP_BIT = 0;  // PORTB
-  static const uint8_t DIR_BIT  = 7;  // PORTD
-  static const uint8_t EN_BIT   = 1;  // PORTB
+  static const uint8_t STEP_BIT = 0;
+  static const uint8_t DIR_BIT  = 7;
+  static const uint8_t EN_BIT   = 1;
   bool enabled_ = false;
 
   static const unsigned long STEP_INTERVAL_US = 80;
@@ -77,7 +55,6 @@ class LinearActuator {
 
   void abort() { abort_requested_ = true; continuous_ = false; }
 
-
   void update() {
     if (!continuous_ && remaining_steps_ == 0) return;
     if (abort_requested_) {
@@ -104,6 +81,6 @@ class LinearActuator {
   bool abort_requested_ = false;
 };
 
-}  // namespace components
+}
 
-#endif  // BIOPAYLOAD_LINEAR_ACTUATOR_H
+#endif

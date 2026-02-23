@@ -1,13 +1,22 @@
 /**
  * Component dev – Nano (pump + spectral sensor + RGB LED).
  *
- * RGB LED: Potentiometer on A1 controls hue (0-360°)
- *   Pins: R=D3, G=D5, B=D9 (PWM)
+ * RGB LED: Two modes:
+ *   - POT mode (default): Potentiometer on A1 controls hue (0-360°)
+ *   - AUTO mode: LED oscillates through full color spectrum
+ *   Pins: R=D3, G=D5, B=D6 (PWM), POT=A1
  *
  * Build & upload:  pio run -e nano_component_dev -t upload --upload-port /dev/cu.usbserial-13110
  * Monitor:         pio device monitor --port /dev/cu.usbserial-13110
  *
- * Commands: PUMP <ms> | SPEC | PING | ABORT | LED
+ * Commands:
+ *   PUMP <ms>    - Run pump for specified milliseconds
+ *   SPEC         - Read spectral sensor
+ *   LED          - Print current LED state
+ *   AUTO         - Toggle between POT and AUTO mode
+ *   AUTO <speed> - Set oscillation speed (0.01-10.0 deg/cycle)
+ *   PING         - Health check
+ *   ABORT        - Stop pump
  */
 
 #include <Arduino.h>
@@ -15,30 +24,27 @@
 #include "components/spectral_sensor.h"
 
 #define SERIAL_BAUD 115200
+#define PIN_PUMP 9
 
-// ----- Pin configuration -----
-#define PIN_PUMP  9   // Pump control (other side to GND)
-// AS7341 uses I2C (SDA=A4, SCL=A5)
+const int POT_PIN = A1;
+const int R_PIN   = 3;
+const int G_PIN   = 5;
+const int B_PIN   = 6;
 
-// RGB LED pins (PWM)
-const int POT_PIN = A1;   // Potentiometer input
-const int R_PIN   = 3;    // Red LED PWM pin
-const int G_PIN   = 5;    // Green LED PWM pin
-const int B_PIN   = 6;    // Blue LED PWM pin (D9 to avoid conflict with pump on D6)
+const float POT_ALPHA = 0.35f;
+const uint16_t LOOP_DELAY_MS = 8;
+const float GAMMA = 2.2f;
+const float DEFAULT_AUTO_SPEED = 1.0f;
 
-// ----- Tuning Parameters -----
-const float POT_ALPHA = 0.35f;      // Exponential smoothing factor
-const uint16_t LOOP_DELAY_MS = 8;   // Loop delay (~125 Hz update rate)
-const float GAMMA = 2.2f;           // Gamma correction factor
-
-// ----- Global State -----
 components::PeristalticPump pump(PIN_PUMP);
 components::SpectralSensor specSensor;
 String inputBuffer;
 bool pumpAckPending = false;
-float potFilt = 0.0f;               // Smoothed potentiometer value
+float potFilt = 0.0f;
 
-// ----- Utility Functions -----
+bool ledAutoMode = false;
+float autoHue = 0.0f;
+float autoSpeed = DEFAULT_AUTO_SPEED;
 
 static inline uint8_t clamp8(int v) {
   if (v < 0)   return 0;
@@ -53,7 +59,6 @@ uint8_t gammaCorrect(uint8_t x) {
   return (uint8_t)(yg * 255.0f + 0.5f);
 }
 
-// ----- HSV to RGB Conversion -----
 void hsvToRgb(float h, float s, float v,
               uint8_t &r, uint8_t &g, uint8_t &b) {
   float c  = v * s;
@@ -81,23 +86,27 @@ void applyLed(uint8_t r, uint8_t g, uint8_t b) {
   analogWrite(B_PIN, gammaCorrect(b));
 }
 
-// Current LED state for reporting
 uint8_t currentR = 0, currentG = 0, currentB = 0;
 float currentHue = 0;
 int currentPotRaw = 0;
 
 void updateLed() {
-  currentPotRaw = analogRead(POT_PIN);
-  potFilt = (1.0f - POT_ALPHA) * potFilt + POT_ALPHA * currentPotRaw;
-  
-  float potNorm = constrain(potFilt / 1023.0f, 0.0f, 1.0f);
-  currentHue = potNorm * 359.9f;
+  if (ledAutoMode) {
+    autoHue += autoSpeed;
+    if (autoHue >= 360.0f) autoHue -= 360.0f;
+    if (autoHue < 0.0f) autoHue += 360.0f;
+    currentHue = autoHue;
+    currentPotRaw = -1;
+  } else {
+    currentPotRaw = analogRead(POT_PIN);
+    potFilt = (1.0f - POT_ALPHA) * potFilt + POT_ALPHA * currentPotRaw;
+    float potNorm = constrain(potFilt / 1023.0f, 0.0f, 1.0f);
+    currentHue = potNorm * 359.9f;
+  }
   
   hsvToRgb(currentHue, 1.0f, 1.0f, currentR, currentG, currentB);
   applyLed(currentR, currentG, currentB);
 }
-
-// ----- Command Processing -----
 
 void processCommand(String cmd) {
   cmd.trim();
@@ -133,8 +142,15 @@ void processCommand(String cmd) {
   }
 
   if (cmd == "LED") {
-    Serial.print("LED Pot:");
-    Serial.print(currentPotRaw);
+    Serial.print("LED Mode:");
+    Serial.print(ledAutoMode ? "AUTO" : "POT");
+    if (!ledAutoMode) {
+      Serial.print(" Pot:");
+      Serial.print(currentPotRaw);
+    } else {
+      Serial.print(" Speed:");
+      Serial.print(autoSpeed, 2);
+    }
     Serial.print(" Hue:");
     Serial.print(currentHue, 1);
     Serial.print(" RGB:");
@@ -143,6 +159,29 @@ void processCommand(String cmd) {
     Serial.print(currentG);
     Serial.print(",");
     Serial.println(currentB);
+    return;
+  }
+
+  if (cmd == "AUTO") {
+    ledAutoMode = !ledAutoMode;
+    if (ledAutoMode) {
+      autoHue = currentHue;
+    }
+    Serial.print("LED mode: ");
+    Serial.println(ledAutoMode ? "AUTO (oscillating)" : "POT (manual)");
+    return;
+  }
+
+  if (cmd.startsWith("AUTO ")) {
+    float speed = cmd.substring(5).toFloat();
+    if (speed >= 0.01f && speed <= 10.0f) {
+      autoSpeed = speed;
+      Serial.print("Auto speed set to ");
+      Serial.print(autoSpeed, 2);
+      Serial.println(" deg/cycle");
+    } else {
+      Serial.println("ERR speed must be 0.01-10.0");
+    }
     return;
   }
 
@@ -157,13 +196,10 @@ void processCommand(String cmd) {
   Serial.println(cmd);
 }
 
-// ----- Setup -----
-
 void setup() {
   Serial.begin(SERIAL_BAUD);
   delay(500);
 
-  // Configure LED pins
   pinMode(R_PIN, OUTPUT);
   pinMode(G_PIN, OUTPUT);
   pinMode(B_PIN, OUTPUT);
@@ -177,11 +213,9 @@ void setup() {
   }
 
   Serial.println("nano_component_dev ready");
-  Serial.println("PUMP <ms> | SPEC | PING | ABORT | LED");
-  Serial.println("Pot on A1 controls RGB LED hue");
+  Serial.println("PUMP <ms> | SPEC | PING | ABORT | LED | AUTO | AUTO <speed>");
+  Serial.println("Pot on A1 controls RGB LED hue (AUTO toggles oscillation)");
 }
-
-// ----- Main Loop -----
 
 void loop() {
   pump.update();

@@ -17,7 +17,6 @@
 
 #define SERIAL_BAUD 115200
 
-// ----- Pin configuration:
 #define PIN_PUMP           6   // Pump control (other side to GND)
 #define PIN_ACTUATOR_STEP  8   // TMC2208 STEP
 #define PIN_ACTUATOR_DIR   7   // TMC2208 DIR

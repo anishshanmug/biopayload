@@ -18,23 +18,18 @@
 
 #define SERIAL_BAUD 115200
 
-// -------------------- Pin Definitions --------------------
-const int POT_PIN = A1;   // Potentiometer input
-const int R_PIN   = 3;    // Red LED PWM pin
-const int G_PIN   = 5;    // Green LED PWM pin
-const int B_PIN   = 6;    // Blue LED PWM pin
+const int POT_PIN = A1;
+const int R_PIN   = 3;
+const int G_PIN   = 5;
+const int B_PIN   = 6;
 
-// -------------------- Tuning Parameters --------------------
-const float POT_ALPHA = 0.35f;      // Exponential smoothing factor
-const uint16_t LOOP_DELAY_MS = 8;   // Loop delay (~125 Hz update rate)
-const float GAMMA = 2.2f;           // Gamma correction factor
+const float POT_ALPHA = 0.35f;
+const uint16_t LOOP_DELAY_MS = 8;
+const float GAMMA = 2.2f;
 
-// -------------------- Global State --------------------
 components::LinearActuator actuator;
 String inputBuffer;
-float potFilt = 0.0f;               // Smoothed potentiometer value
-
-// -------------------- Utility Functions --------------------
+float potFilt = 0.0f;
 
 static inline uint8_t clamp8(int v) {
   if (v < 0)   return 0;
@@ -49,7 +44,6 @@ uint8_t gammaCorrect(uint8_t x) {
   return (uint8_t)(yg * 255.0f + 0.5f);
 }
 
-// -------------------- HSV to RGB Conversion --------------------
 void hsvToRgb(float h, float s, float v,
               uint8_t &r, uint8_t &g, uint8_t &b) {
   float c  = v * s;
@@ -77,16 +71,13 @@ void applyLed(uint8_t r, uint8_t g, uint8_t b) {
   analogWrite(B_PIN, gammaCorrect(b));
 }
 
-// -------------------- Setup --------------------
 void setup() {
   Serial.begin(SERIAL_BAUD);
   
-  // Configure LED pins
   pinMode(R_PIN, OUTPUT);
   pinMode(G_PIN, OUTPUT);
   pinMode(B_PIN, OUTPUT);
   
-  // Initialize actuator
   actuator.begin();
 
   Serial.println("uno_component_dev ready");
@@ -94,12 +85,9 @@ void setup() {
   Serial.println("Pot on A1 controls RGB LED hue");
 }
 
-// -------------------- Main Loop --------------------
 void loop() {
-  // Update actuator state machine
   actuator.update();
 
-  // ---- Potentiometer + LED update ----
   int potRaw = analogRead(POT_PIN);
   potFilt = (1.0f - POT_ALPHA) * potFilt + POT_ALPHA * potRaw;
   
@@ -110,7 +98,6 @@ void loop() {
   hsvToRgb(hue, 1.0f, 1.0f, r, g, b);
   applyLed(r, g, b);
 
-  // ---- Serial command processing ----
   while (Serial.available()) {
     char c = Serial.read();
     if (c == '\n' || c == '\r') {
@@ -125,7 +112,6 @@ void loop() {
         actuator.stop();
         Serial.println("Stopped");
       } else if (inputBuffer == "led") {
-        // Print current LED state
         Serial.print("Pot: "); Serial.print(potRaw);
         Serial.print(" Hue: "); Serial.print(hue, 1);
         Serial.print(" RGB: "); 

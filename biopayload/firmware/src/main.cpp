@@ -19,27 +19,21 @@
 #include <SPI.h>
 #include <SD.h>
 
-// Firmware version (reported to app on HELLO)
 #define FIRMWARE_VERSION "1.0.0"
 
-// Pin definitions
 const int SD_CS_PIN = 10;
 const int LED_PIN = LED_BUILTIN;  // Pin 13 on Nano
 const unsigned long BLINK_DELAY = 200;
 
-// State machine
 enum PayloadState { IDLE, RUNNING, DONE, ERROR_STATE };
 PayloadState currentState = IDLE;
 
-// SD card status
 bool sdCardReady = false;
 File logFile;
 String currentRunId = "";
 
-// Input buffer
 String inputBuffer = "";
 
-// Forward declarations
 void processCommand(String cmd);
 void blinkLED(unsigned long inter, int count);
 bool initSDCard();
@@ -51,7 +45,6 @@ void setup() {
     Serial.begin(115200);
     pinMode(LED_PIN, OUTPUT);
     
-    // Initialize SD card
     sdCardReady = initSDCard();
     if (sdCardReady) {
         Serial.println("INFO SD_READY");
@@ -59,9 +52,8 @@ void setup() {
         Serial.println("INFO SD_NOT_FOUND");
     }
     
-    blinkLED(BLINK_DELAY, 3); // Blink 3 times to show IDLE
-    
-    // Ready message
+    blinkLED(BLINK_DELAY, 3); 
+
     Serial.println("STATE IDLE");
 }
  
@@ -106,7 +98,6 @@ void processCommand(String cmd) {
             Serial.println("ERR {\"code\":\"INVALID_STATE\",\"message\":\"Must be IDLE\"}");
             return;
         }
-        // For now, just acknowledge
         Serial.println("ACK SET_CONFIG");
     }
     else if (cmd == "START") {
@@ -120,15 +111,12 @@ void processCommand(String cmd) {
         Serial.println("ACK START");
         Serial.println("STATE RUNNING");
         
-        // Generate run ID from millis (in real system, would come from config)
         currentRunId = String(millis());
         
-        // Start SD logging
         if (sdCardReady) {
             startLogging(currentRunId);
         }
         
-        // Run experiment - send telemetry messages
         unsigned long startTime = millis();
         for (int i = 0; i < 5; i++) {
             unsigned long t_ms = millis() - startTime;
@@ -136,12 +124,10 @@ void processCommand(String cmd) {
             int sensor = 800 + random(50);
             int challenge = i + 1;
             
-            // Log to SD card
             if (sdCardReady && logFile) {
                 logTelemetry(t_ms, temp, sensor, challenge);
             }
             
-            // Send to serial
             Serial.print("TELEM {\"t_ms\":");
             Serial.print(t_ms);
             Serial.print(",\"temp\":");
@@ -155,7 +141,6 @@ void processCommand(String cmd) {
             delay(500);
         }
         
-        // Stop logging
         if (sdCardReady) {
             stopLogging();
         }
@@ -164,7 +149,6 @@ void processCommand(String cmd) {
         Serial.println("STATE DONE");
         blinkLED(BLINK_DELAY, 1);
         
-        // Return to IDLE after completion
         currentState = IDLE;
         Serial.println("STATE IDLE");
     }
@@ -193,7 +177,6 @@ void blinkLED(unsigned long inter, int count) {
     }
 }
 
-// ============== SD Card Functions ==============
 
 bool initSDCard() {
     if (SD.begin(SD_CS_PIN)) {
@@ -203,14 +186,12 @@ bool initSDCard() {
 }
 
 void startLogging(String runId) {
-    // Create filename: RUN_xxxxx.csv (8.3 format for compatibility)
-    // Use last 5 digits of runId to keep filename short
+
     String filename = "R" + runId.substring(max(0, (int)runId.length() - 5)) + ".csv";
     
     logFile = SD.open(filename.c_str(), FILE_WRITE);
     
     if (logFile) {
-        // Write CSV header
         logFile.println("t_ms,temp_c,sensor,challenge");
         logFile.flush();
         Serial.print("INFO LOG_STARTED ");
@@ -223,16 +204,16 @@ void startLogging(String runId) {
 void logTelemetry(unsigned long t_ms, float temp_c, int sensor, int challenge_i) {
     if (!logFile) return;
     
-    // Write CSV row
+    // write CSV row
     logFile.print(t_ms);
     logFile.print(",");
-    logFile.print(temp_c, 2);  // 2 decimal places
+    logFile.print(temp_c, 2);  
     logFile.print(",");
     logFile.print(sensor);
     logFile.print(",");
     logFile.println(challenge_i);
     
-    // Flush periodically to ensure data is written
+    // flush 
     logFile.flush();
 }
 
