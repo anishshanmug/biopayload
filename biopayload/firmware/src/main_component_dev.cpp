@@ -1,117 +1,132 @@
 /**
- * Component dev main - minimal firmware for quick iteration.
+ * OD600 test with stepper - Arduino Nano ESP32
  *
- * Build & upload:  pio run -e component_dev -t upload
- * Then open monitor: pio device monitor
+ * Red LED backlight + AS7341 590nm channel for OD measurement.
+ * Stepper runs continuously, controlled by single-char commands.
  *
- * Commands (one per line):
- *   PUMP <ms>            Run peristaltic pump (e.g. PUMP 1000)
- *   ACTUATOR STEP <n> <d> Move linear actuator n steps, direction d (0 or 1)
- *   ABORT                 Stop pump and actuator immediately
- *   PING                  Check alive
+ * Pins:
+ *   RGB LED:  R=A1, G=A0, B=A2
+ *   AS7341:   SDA=A4, SCL=A5
+ *   Stepper:  STEP=4, DIR=2, EN=3  (raw GPIO numbers)
+ *
+ * Serial commands (single character):
+ *   r  - reverse direction
+ *   p  - pause / resume stepper
+ *
+ * Build & upload:
+ *   pio run -e component_dev -t upload
  */
 
 #include <Arduino.h>
-#include "components/peristaltic_pump.h"
-#include "components/linear_actuator.h"
+#include "components/spectral_sensor.h"
 
-#define SERIAL_BAUD 115200
+static const uint32_t SERIAL_BAUD = 115200;
 
-#define PIN_PUMP           6   // Pump control (other side to GND)
-#define PIN_ACTUATOR_STEP  8   // TMC2208 STEP
-#define PIN_ACTUATOR_DIR   7   // TMC2208 DIR
-#define PIN_ACTUATOR_EN    9   // TMC2208 ENABLE (active-LOW), or -1 if not used
+// RGB LED
+static const int PIN_LED_R = A1;
+static const int PIN_LED_G = A0;
+static const int PIN_LED_B = A2;
 
-components::PeristalticPump pump(PIN_PUMP);
-components::LinearActuator actuator(PIN_ACTUATOR_STEP, PIN_ACTUATOR_DIR, PIN_ACTUATOR_EN);
-String inputBuffer;
-bool pumpAckPending = false;
-bool actuatorAckPending = false;
+// Stepper (raw GPIO numbers, same as working Arduino IDE sketch)
+static const int PIN_STEP = 4;
+static const int PIN_DIR  = 2;
+static const int PIN_EN   = 3;
+static const unsigned long STEP_INTERVAL_US = 120;
 
-void processCommand(String cmd) {
-  cmd.trim();
+// Stepper state
+bool stepperPaused  = true;
+bool stepperForward = true;
+unsigned long lastStepUs = 0;
 
-  if (cmd == "PING") {
-    Serial.println("ACK PING");
-    return;
-  }
-
-  if (cmd.startsWith("PUMP ")) {
-    unsigned long ms = (unsigned long)cmd.substring(5).toInt();
-    Serial.print("PUMP run ");
-    Serial.print(ms);
-    Serial.println(" ms");
-    pump.startRunForMs(ms);
-    pumpAckPending = true;
-    return;
-  }
-
-  if (cmd.startsWith("ACTUATOR STEP ")) {
-    int space = cmd.indexOf(' ', 14);
-    if (space < 0) {
-      Serial.println("ERR ACTUATOR usage: ACTUATOR STEP <steps> <dir 0|1>");
-      return;
-    }
-    long steps = cmd.substring(14, space).toInt();
-    int dir = cmd.substring(space + 1).toInt();
-    if (steps <= 0) {
-      Serial.println("ERR steps must be positive");
-      return;
-    }
-    long signedSteps = (dir != 0) ? steps : -steps;
-    Serial.print("ACTUATOR ");
-    Serial.print(steps);
-    Serial.print(" steps dir ");
-    Serial.println(dir);
-    actuator.startMoveSteps(signedSteps);
-    actuatorAckPending = true;
-    return;
-  }
-
-  if (cmd == "ABORT") {
-    pump.abort();
-    actuator.abort();
-    pumpAckPending = false;
-    actuatorAckPending = false;
-    Serial.println("ACK ABORT");
-    return;
-  }
-
-  Serial.print("ERR unknown: ");
-  Serial.println(cmd);
-}
+// Sensor
+components::SpectralSensor gSpecSensor;
+static unsigned long lastSpecReadMs = 0;
+static const unsigned long SPEC_INTERVAL_MS = 150;
+static bool sensorReadingStarted = false;
 
 void setup() {
   Serial.begin(SERIAL_BAUD);
-  pump.begin();
-  actuator.begin();
+  delay(500);
 
-  Serial.println("component_dev ready");
-  Serial.println("PUMP <ms> | ACTUATOR STEP <n> <0|1> | PING | ABORT");
+  // LED - red for OD600
+  pinMode(PIN_LED_R, OUTPUT);
+  pinMode(PIN_LED_G, OUTPUT);
+  pinMode(PIN_LED_B, OUTPUT);
+  digitalWrite(PIN_LED_R, HIGH);
+  digitalWrite(PIN_LED_G, LOW);
+  digitalWrite(PIN_LED_B, LOW);
+
+  // Stepper
+  pinMode(PIN_STEP, OUTPUT);
+  pinMode(PIN_DIR, OUTPUT);
+  pinMode(PIN_EN, OUTPUT);
+  digitalWrite(PIN_STEP, LOW);
+  digitalWrite(PIN_DIR, HIGH);
+  digitalWrite(PIN_EN, LOW);
+
+  // Sensor
+  if (gSpecSensor.begin()) {
+    gSpecSensor.setATIME(29);
+    gSpecSensor.setASTEP(599);
+    gSpecSensor.setGain(AS7341_GAIN_64X);
+    Serial.println("AS7341 OK");
+  } else {
+    Serial.println("AS7341 FAIL (check I2C wiring)");
+  }
+
+  Serial.println("OD600 + stepper");
+  Serial.println("  r = reverse   p = pause/resume");
 }
 
 void loop() {
-  pump.update();
-  actuator.update();
-
-  if (pumpAckPending && !pump.running()) {
-    pumpAckPending = false;
-    Serial.println("ACK PUMP");
-  }
-  if (actuatorAckPending && !actuator.moving()) {
-    actuatorAckPending = false;
-    Serial.println("ACK ACTUATOR");
-  }
-
+  // Single-char commands
   while (Serial.available()) {
-    char c = Serial.read();
-    if (c == '\n' || c == '\r') {
-      if (inputBuffer.length() > 0) {
-        processCommand(inputBuffer);
-        inputBuffer = "";
-      }
-    } else {
-      inputBuffer += c;
+    char c = (char)Serial.read();
+    if (c == 'r' || c == 'R') {
+      stepperForward = !stepperForward;
+      digitalWrite(PIN_DIR, stepperForward ? HIGH : LOW);
+      Serial.println(stepperForward ? "DIR: forward" : "DIR: reverse");
+    } else if (c == 'p' || c == 'P') {
+      stepperPaused = !stepperPaused;
+      Serial.println(stepperPaused ? "PAUSED" : "RUNNING");
+    }
+  }
+
+  // Stepper (non-blocking)
+  if (!stepperPaused) {
+    unsigned long now = micros();
+    if ((unsigned long)(now - lastStepUs) >= STEP_INTERVAL_US) {
+      lastStepUs = now;
+      digitalWrite(PIN_STEP, HIGH);
+      delayMicroseconds(1);
+      digitalWrite(PIN_STEP, LOW);
+    }
+  }
+
+  // Sensor read - non-blocking using startReading/checkReadingProgress
+  if (gSpecSensor.isReady()) {
+    unsigned long now = millis();
+    if (!sensorReadingStarted && (now - lastSpecReadMs >= SPEC_INTERVAL_MS)) {
+      // Kick off a new measurement
+      gSpecSensor.as7341().startReading();
+      sensorReadingStarted = true;
+    }
+    if (sensorReadingStarted && gSpecSensor.as7341().checkReadingProgress()) {
+      // Measurement complete - collect results
+      components::SpectralReading r;
+      r.f1_415nm = gSpecSensor.as7341().getChannel(AS7341_CHANNEL_415nm_F1);
+      r.f2_445nm = gSpecSensor.as7341().getChannel(AS7341_CHANNEL_445nm_F2);
+      r.f3_480nm = gSpecSensor.as7341().getChannel(AS7341_CHANNEL_480nm_F3);
+      r.f4_515nm = gSpecSensor.as7341().getChannel(AS7341_CHANNEL_515nm_F4);
+      r.f5_555nm = gSpecSensor.as7341().getChannel(AS7341_CHANNEL_555nm_F5);
+      r.f6_590nm = gSpecSensor.as7341().getChannel(AS7341_CHANNEL_590nm_F6);
+      r.f7_630nm = gSpecSensor.as7341().getChannel(AS7341_CHANNEL_630nm_F7);
+      r.f8_680nm = gSpecSensor.as7341().getChannel(AS7341_CHANNEL_680nm_F8);
+      r.clear    = gSpecSensor.as7341().getChannel(AS7341_CHANNEL_CLEAR);
+      r.nir      = gSpecSensor.as7341().getChannel(AS7341_CHANNEL_NIR);
+      components::SpectralSensor::printReading(r);
+      sensorReadingStarted = false;
+      lastSpecReadMs = millis();
     }
   }
 }

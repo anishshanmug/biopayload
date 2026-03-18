@@ -77,6 +77,8 @@ class SpectralSensor {
   void setATIME(uint8_t atime) { as7341_.setATIME(atime); }
   void setASTEP(uint16_t astep) { as7341_.setASTEP(astep); }
 
+  Adafruit_AS7341 &as7341() { return as7341_; }
+
  private:
   uint8_t addr_;
   Adafruit_AS7341 as7341_;
