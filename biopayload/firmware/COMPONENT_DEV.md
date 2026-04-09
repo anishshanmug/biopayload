@@ -30,14 +30,14 @@ You have **two Arduinos** with different components. Each board gets its own fir
 ## Peristaltic pump (pump board)
 
 - **Pins:** Edit `PIN_PUMP` in **`src/nano_component_dev.cpp`** (default 6). Other side of pump → GND.
-- **API:** `components::PeristalticPump` in `include/components/peristaltic_pump.h`
+- **API:** `components::PeristalticPump` in `src/components/peristaltic_pump.h`
   - `begin()`, `startRunForMs(ms)`, `update()`, `abort()`, `running()`, `on()`, `off()`
 
 ## Linear actuator (actuator board)
 
 - **Hardware:** [Haydon Kerk Size 8 21mm](https://www.haydonkerkpittman.com/products/linear-actuators/hybrid-stepper/size-8), [TMC2208](https://www.analog.com/en/products/tmc2208.html) (Step/Dir/Enable).
 - **Pins:** Edit `PIN_ACTUATOR_STEP`, `PIN_ACTUATOR_DIR`, `PIN_ACTUATOR_EN` in **`src/uno_component_dev.cpp`** (defaults 8, 7, 9). ENABLE is active-LOW; use `-1` if not connected.
-- **API:** `components::LinearActuator` in `include/components/linear_actuator.h`
+- **API:** `components::LinearActuator` in `src/components/linear_actuator.h`
   - `begin()`, `startMoveSteps(steps)`, `update()`, `abort()`, `moving()`, `setStepIntervalUs(us)`, `moveSteps(steps)`, `enable()`, `disable()`
 
 ---
