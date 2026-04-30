@@ -27,8 +27,7 @@ An embedded biology payload system for automated well-plate scanning. An Arduino
 |------|---------|-------|
 | [PlatformIO Core](https://docs.platformio.org/en/latest/core/installation/index.html) | ≥ 6.x | CLI or VS Code extension |
 | Python | ≥ 3.10 | For ground station scripts |
-| Arduino Nano ESP32 | — | Primary payload MCU (USB-C) |
-| Arduino Nano (ATmega328P) | — | Secondary actuator board (optional) |
+| Arduino Nano ESP32 | — | Payload MCU (USB-C) |
 
 ---
 
@@ -84,17 +83,13 @@ An embedded biology payload system for automated well-plate scanning. An Arduino
 
 ### Flashing Firmware
 
-All firmware targets are defined in `biopayload/firmware/platformio.ini`. Use the following commands from the `biopayload/firmware/` directory:
+The single firmware target is defined in `biopayload/firmware/platformio.ini`. From the `biopayload/firmware/` directory:
 
 | Target | Board | Command |
 |--------|-------|---------|
 | `component_dev` | Arduino Nano ESP32 | `pio run -e component_dev -t upload` |
-| `stepper_test` | Arduino Nano ESP32 | `pio run -e stepper_test -t upload` |
-| `nano_component_dev` | Arduino Nano (ATmega328P) | `pio run -e nano_component_dev -t upload` |
-| `uno_component_dev` | Arduino Uno | `pio run -e uno_component_dev -t upload` |
-| `sd_test` | Arduino Nano (ATmega328P) | `pio run -e sd_test -t upload` |
 
-> **Note:** The `component_dev` environment is the primary demo firmware. It performs full well-plate scans and logs results to SD card.
+`component_dev` performs full well-plate scans and logs results to SD card. It is also the default env, so `pio run -t upload` is equivalent.
 
 To open the serial monitor after uploading:
 
@@ -183,19 +178,15 @@ python wellplate_gui.py
 
 ```
 biopayload/
-├── firmware/                   # PlatformIO firmware project
-│   ├── platformio.ini          # Build environments for all targets
+├── firmware/                   # PlatformIO firmware project (Nano ESP32 only)
+│   ├── platformio.ini          # Single env: component_dev
 │   ├── src/
-│   │   ├── main_component_dev.cpp   # Primary demo: well-plate scan (Nano ESP32)
-│   │   ├── stepper_test.cpp         # Standalone stepper back-and-forth test
-│   │   ├── nano_component_dev.cpp   # Pump + spectral sensor (Nano ATmega)
-│   │   ├── uno_component_dev.cpp    # Actuator board firmware (Uno)
-│   │   └── main.cpp                 # Legacy / base firmware
-│   ├── include/
+│   │   ├── main_component_dev.cpp   # Primary demo: well-plate scan
 │   │   └── components/
 │   │       ├── spectral_sensor.h    # AS7341 wrapper
 │   │       ├── linear_actuator.h    # Stepper motor abstraction
-│   │       └── peristaltic_pump.h   # Pump abstraction
+│   │       └── peristaltic_pump.{h,cpp}  # Pump abstraction
+│   ├── include/                # Header search-path stub
 │   └── lib/                    # Private project libraries (PlatformIO)
 │
 ├── home/                       # Python ground station
