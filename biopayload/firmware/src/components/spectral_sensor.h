@@ -44,6 +44,19 @@ class SpectralSensor {
 
   bool isReady() const { return ready_; }
 
+  // Alias for isReady() to match the consistent component naming used by
+  // SYS_STATUS. For the AS7341 this is real I2C-probe-based detection, not
+  // just "pin set up".
+  bool present() const { return ready_; }
+
+  uint8_t address() const { return addr_; }
+
+  // Re-attempt I2C detection. Useful if the sensor was plugged in after boot.
+  bool tryReconnect() {
+    if (ready_) return true;
+    return begin();
+  }
+
   bool read(SpectralReading &r) {
     if (!ready_) return false;
     if (!as7341_.readAllChannels()) return false;
@@ -76,6 +89,10 @@ class SpectralSensor {
   void setGain(as7341_gain_t gain) { as7341_.setGain(gain); }
   void setATIME(uint8_t atime) { as7341_.setATIME(atime); }
   void setASTEP(uint16_t astep) { as7341_.setASTEP(astep); }
+
+  // For interface uniformity with abortAll(); AS7341 reads are short and
+  // self-completing so there's nothing to actually interrupt.
+  void abort() { /* no-op */ }
 
   Adafruit_AS7341 &as7341() { return as7341_; }
 

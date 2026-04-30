@@ -34,7 +34,19 @@ void poll();
 // Pending-DONE registration. The bound check is a function pointer with an
 // opaque ctx pointer (component-scoped state lives in the caller, not here).
 // `tag` must outlive the registration -- pass a string literal or a static.
-using DoneCheck = bool (*)(void* ctx);
+//
+// The check returns three states:
+//   PENDING  - operation still running; poll again later
+//   DONE     - succeeded; dispatcher emits "DONE <tag>" and clears the slot
+//   FAILED   - operation failed; the check is responsible for having already
+//              emitted the appropriate "ERR <code>" line. The dispatcher just
+//              clears the slot, no DONE.
+enum class DoneResult : uint8_t {
+  PENDING = 0,
+  DONE    = 1,
+  FAILED  = 2,
+};
+using DoneCheck = DoneResult (*)(void* ctx);
 bool registerPending(const char* tag, DoneCheck isDone, void* ctx = nullptr);
 
 // Wipe every pending DONE entry without emitting anything. Called by ABORT.

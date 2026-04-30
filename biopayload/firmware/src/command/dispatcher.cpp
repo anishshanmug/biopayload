@@ -86,8 +86,12 @@ void pollLine() {
 void pollPending() {
   for (size_t i = 0; i < PENDING_MAX; ++i) {
     if (g_pending[i].tag == nullptr || g_pending[i].check == nullptr) continue;
-    if (g_pending[i].check(g_pending[i].ctx)) {
+    DoneResult r = g_pending[i].check(g_pending[i].ctx);
+    if (r == DoneResult::DONE) {
       protocol::done(g_pending[i].tag);
+      g_pending[i] = PendingEntry{};
+    } else if (r == DoneResult::FAILED) {
+      // The check has already emitted ERR <code>. Just clear the slot.
       g_pending[i] = PendingEntry{};
     }
   }

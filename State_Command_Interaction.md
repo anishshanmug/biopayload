@@ -253,5 +253,3 @@ This is exactly what `[biopayload/home/test_protocol.py](biopayload/home/test_pr
 
 ---
 
-If this matches the model you had in your head, say "go" and I'll switch to agent mode and start on Phase 1. If anything in the contract above is wrong (e.g. you want SCANNING to *pause* the ACTIVE elapsed timer, or you want manual writes allowed during ACTIVE, or you want `DONE` to require a host ack before auto-resetting to IDLE), tell me which and I'll revise the plan before I touch code.
-

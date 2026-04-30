@@ -1,14 +1,15 @@
 /**
  * BioPayload firmware entry point (Arduino Nano ESP32).
  *
- * Phase 1 of the rework: thin shell that delegates everything to the command
- * dispatcher and the state machine. Component setup, the experiment runtime,
- * and the 1st-order command handlers are filled in by later phases.
+ * Phase 2 of the rework: state machine + dispatcher + every 1st-order
+ * component command (PUMP_*, MOT_*, LED_*, LIM_*, SPEC_*) plus the SYS_STATUS
+ * cross-component roll-up. The experiment runtime (Phase 3) plugs in via the
+ * stateMachine.tick() callout.
  *
  * Wire protocol: see biopayload/firmware/COMMAND_REFERENCE.md.
  *   - 115200 8N1 over USB CDC
- *   - newline-delimited (\n) commands in, ACK / DONE / ERR / STATE / TELEM
- *     responses out
+ *   - newline-delimited (\n) commands in, ACK / DONE / ERR / STATE / TELEM /
+ *     SYS_STATUS responses out
  *
  * The legacy single-character well-plate scan demo lives in
  * `main_demo_legacy.cpp`, excluded from build.
@@ -20,6 +21,7 @@
 #include <Arduino.h>
 
 #include "command/dispatcher.h"
+#include "components/components.h"
 #include "state/state_machine.h"
 
 namespace {
@@ -33,13 +35,20 @@ void setup() {
   delay(500);
 
   Serial.println();
-  Serial.println(F("BioPayload firmware booting (phase 1: protocol skeleton)"));
-  Serial.println(F("Send 'PING' or 'HELLO' to verify the wire."));
+  Serial.println(F("BioPayload firmware booting (phase 2: component handlers online)"));
+
+  // Per-component init. Prints `[boot] pump on pin 8 OK`, etc., so the
+  // operator sees presence detection (real for I2C devices, "pin set up
+  // cleanly" for GPIO devices) before any commands fly.
+  biopayload::components::beginAll();
 
   biopayload::stateMachine.begin();
+
+  Serial.println(F("Ready. Try: HELLO, SYS_STATUS, PUMP_RUN 250, LED_SET 64 0 0."));
 }
 
 void loop() {
   biopayload::dispatcher::poll();
+  biopayload::components::tickAll();
   biopayload::stateMachine.tick(millis());
 }

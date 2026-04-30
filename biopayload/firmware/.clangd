@@ -1,0 +1,16 @@
+# clangd config for the BioPayload firmware tree.
+#
+# The PlatformIO build toolchain is xtensa-esp32s3-elf-g++, which understands
+# a few flags that clang (and therefore clangd) doesn't: -mlongcalls,
+# -fstrict-volatile-bitfields, -fno-tree-switch-conversion. These are
+# performance/codegen hints irrelevant to static analysis -- strip them so
+# clangd stops emitting "Unknown argument" diagnostics for every TU.
+
+CompileFlags:
+  Remove:
+    - -mlongcalls
+    - -fstrict-volatile-bitfields
+    - -fno-tree-switch-conversion
+    - -mtext-section-literals
+    - -fno-jump-tables
+    - -fstrict-volatile-bitfields
