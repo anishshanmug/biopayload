@@ -223,7 +223,7 @@ def t_sys_status(s: Suite) -> None:
         description="SYS_STATUS line",
     )
     # Sanity-check the field set.
-    for field_name in ("pump:", "motor:", "led:", "limit:", "spec:", "state:"):
+    for field_name in ("pump:", "motor:", "led:", "limit:", "spec:", "sd:", "state:"):
         assert field_name in line, f"missing {field_name!r} in {line!r}"
 
 
@@ -324,14 +324,15 @@ def t_lim_status(s: Suite) -> None:
     )
 
 
-def t_mot_enable_disable(s: Suite) -> None:
+def t_mot_move(s: Suite) -> None:
+    # First command in the motor block: assert the driver for subsequent moves.
     s.bus.send("MOT_ENABLE")
     s.bus.expect(lambda l: l == "ACK MOT_ENABLE", description="ACK MOT_ENABLE")
-    s.bus.send("MOT_DISABLE")
-    s.bus.expect(lambda l: l == "ACK MOT_DISABLE", description="ACK MOT_DISABLE")
-
-
-def t_mot_move(s: Suite) -> None:
+    # Read position before the move so the assertion is history-independent
+    # (the counter accumulates across resets if the board isn't power-cycled).
+    s.bus.send("MOT_POS")
+    pos_line = s.bus.expect(lambda l: l.startswith("MOT_POS "), description="MOT_POS (pre-move)")
+    pos_before = int(pos_line.split()[1])
     s.bus.send("MOT_MOVE 50")
     s.bus.expect(lambda l: l == "ACK MOT_MOVE", description="ACK MOT_MOVE")
     s.bus.expect(
@@ -340,10 +341,10 @@ def t_mot_move(s: Suite) -> None:
         description="DONE MOT_MOVE",
     )
     s.bus.send("MOT_POS")
-    s.bus.expect(
-        lambda l: l.startswith("MOT_POS ") and int(l.split()[1]) == 50,
-        description="MOT_POS 50",
-    )
+    pos_line = s.bus.expect(lambda l: l.startswith("MOT_POS "), description="MOT_POS (post-move)")
+    pos_after = int(pos_line.split()[1])
+    delta = pos_after - pos_before
+    assert delta == 50, f"expected position delta 50, got {delta} (before={pos_before} after={pos_after})"
 
 
 def t_mot_run_stop(s: Suite) -> None:
@@ -377,6 +378,9 @@ def t_mot_home_timeout(s: Suite) -> None:
         timeout=HOME_TIMEOUT,
         description="DONE MOT_HOME or ERR HOME_TIMEOUT",
     )
+    # Last command in the motor block: release the driver.
+    s.bus.send("MOT_DISABLE")
+    s.bus.expect(lambda l: l == "ACK MOT_DISABLE", description="ACK MOT_DISABLE")
 
 
 def t_spec_status(s: Suite) -> None:
@@ -421,6 +425,83 @@ def t_spec_bad_args(s: Suite) -> None:
     s.bus.expect(
         lambda l: l.startswith("ERR "),
         description="ERR (SPEC_ATIME 256)",
+    )
+
+
+def t_sd_status(s: Suite) -> None:
+    s.bus.send("SD_STATUS")
+    line = s.bus.expect(
+        lambda l: l.startswith("SD_STATUS "),
+        description="SD_STATUS READY|NOT_FOUND",
+    )
+    # Both outcomes are valid on a bare board; verify the shape is right.
+    if "READY" in line:
+        assert "total:" in line and "used:" in line, \
+            f"SD_STATUS READY missing total/used fields: {line!r}"
+    else:
+        assert "NOT_FOUND" in line, \
+            f"Unexpected SD_STATUS response: {line!r}"
+
+
+def t_sd_list(s: Suite) -> None:
+    s.bus.send("SD_STATUS")
+    status = s.bus.expect(lambda l: l.startswith("SD_STATUS "), description="SD_STATUS")
+    if "NOT_FOUND" in status:
+        # SD_LIST on a missing card should return ERR, not hang.
+        s.bus.send("SD_LIST")
+        s.bus.expect(lambda l: l.startswith("ERR "), description="ERR (no card)")
+        return
+    s.bus.send("SD_LIST")
+    # Consume entries until SD_LIST_END (may be 0 files on a fresh card).
+    s.bus.expect(
+        lambda l: l == "SD_LIST_END" or l.startswith("SD_FILE "),
+        timeout=3.0,
+        description="SD_FILE or SD_LIST_END",
+    )
+    # Drain the rest.
+    s.bus.read_lines(0.3)
+
+
+def _get_events_log_size(s: Suite) -> int | None:
+    """Return the byte size of /events.log, or None if not found."""
+    s.bus.flush()
+    s.bus.send("SD_LIST")
+    size: int | None = None
+    while True:
+        line = s.bus.expect(
+            lambda l: l.startswith("SD_FILE ") or l == "SD_LIST_END",
+            timeout=3.0,
+            description="SD_LIST entry",
+        )
+        if line == "SD_LIST_END":
+            break
+        parts = line.split()
+        if len(parts) == 3 and parts[1] == "events.log":
+            size = int(parts[2])
+    return size
+
+
+def t_sd_write(s: Suite) -> None:
+    s.bus.send("SD_STATUS")
+    status = s.bus.expect(lambda l: l.startswith("SD_STATUS "), description="SD_STATUS")
+    if "NOT_FOUND" in status:
+        print("    (no SD card — skipping write test)")
+        return
+
+    size_before = _get_events_log_size(s)
+    assert size_before is not None, (
+        "events.log not found on SD card — was the card inserted before boot?"
+    )
+
+    s.bus.send("ABORT")
+    s.bus.expect(lambda l: l == "ACK ABORT", description="ACK ABORT")
+    # Give the firmware a moment to flush the append.
+    time.sleep(0.1)
+
+    size_after = _get_events_log_size(s)
+    assert size_after is not None, "events.log disappeared after ABORT"
+    assert size_after > size_before, (
+        f"events.log did not grow after ABORT ({size_before} → {size_after} bytes)"
     )
 
 
@@ -497,7 +578,6 @@ def main() -> int:
 
         suite.run("LIM_STATUS",              t_lim_status)
 
-        suite.run("MOT_ENABLE / DISABLE",    t_mot_enable_disable)
         suite.run("MOT_MOVE",                t_mot_move)
         suite.run("MOT_RUN / STOP",          t_mot_run_stop)
         suite.run("MOT_HOME (timeout path)", t_mot_home_timeout)
@@ -505,6 +585,10 @@ def main() -> int:
         suite.run("SPEC_STATUS",             t_spec_status)
         suite.run("SPEC_READ",               t_spec_read)
         suite.run("SPEC bad args",           t_spec_bad_args)
+
+        suite.run("SD_STATUS",               t_sd_status)
+        suite.run("SD_LIST",                 t_sd_list)
+        suite.run("SD write (events.log)",   t_sd_write)
 
         suite.run("ABORT clears pending",    t_abort_clears_pump)
 

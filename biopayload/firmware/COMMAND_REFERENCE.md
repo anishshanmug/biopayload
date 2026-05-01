@@ -118,6 +118,19 @@ in any state.
 | `LED_OFF` | `ACK LED_OFF` | IDLE | Turn off (R=G=B=0) |
 | `LED_STATUS` | `LED_STATUS <r> <g> <b>` | any | Last commanded color |
 
+### SD card
+
+| Command | Response | States | Description |
+|---------|----------|--------|-------------|
+| `SD_STATUS` | `SD_STATUS READY total:<bytes> used:<bytes>` or `SD_STATUS NOT_FOUND` | any | Card presence + capacity (re-probes if absent) |
+| `SD_LIST [path]` | `SD_FILE <name> DIR` or `SD_FILE <name> <bytes>` per entry, then `SD_LIST_END` | any | List entries in `path` (default `/`) |
+| `SD_DELETE <path>` | `ACK SD_DELETE` or `ERR SD_FAIL <path>` | IDLE | Remove a single file |
+
+**Implicit logging (no command needed):**
+- `/events.log` is opened at boot and appended forever. Every state transition, `ABORT`, and experiment boundary is written automatically. Format: `T=<millis> <message>`.
+- `/exp_NNN/scan.csv` is opened at experiment `START` and one row is appended immediately after each well reading during SCANNING. Header: `timestamp_ms,well_row,well_col,f1_415,f2_445,f3_480,f4_515,f5_555,f6_590,f7_630,f8_680,clear,nir`. The file is closed cleanly on DONE, ABORT, or ERROR.
+- If the SD card is absent, all implicit logging is silently skipped and the experiment continues normally.
+
 ### System
 
 | Command | Response | States | Description |
@@ -125,8 +138,8 @@ in any state.
 | `PING` | `ACK PING` | any | Heartbeat |
 | `HELLO` | `ACK HELLO <version>` | any | Handshake; firmware version |
 | `STATE` | `STATE <name>` | any | Read current state-machine state |
-| `SYS_STATUS` | `SYS_STATUS pump:… motor:… led:… limit:… spec:… state:…` | any | One-line snapshot of every component + state |
-| `ABORT` | `ACK ABORT` | any | Emergency stop: clears pending DONEs, drives all components off, returns to IDLE |
+| `SYS_STATUS` | `SYS_STATUS pump:… motor:… led:… limit:… spec:… sd:… state:…` | any | One-line snapshot of every component + state |
+| `ABORT` | `ACK ABORT` | any | Emergency stop: clears pending DONEs, drives all components off, closes open SD files, returns to IDLE |
 
 ---
 

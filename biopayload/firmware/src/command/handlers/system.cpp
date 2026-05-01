@@ -67,6 +67,9 @@ void hSysStatus(const ParsedCmd& /*cmd*/) {
   Serial.print(F(" spec:"));
   Serial.print(components::spec.isReady() ? F("READY") : F("NOT_FOUND"));
 
+  Serial.print(F(" sd:"));
+  Serial.print(components::sd.present() ? F("READY") : F("NOT_FOUND"));
+
   Serial.print(F(" state:"));
   Serial.println(stateName(stateMachine.current()));
 }

@@ -3,6 +3,7 @@
 #include "command/dispatcher.h"
 #include "command/protocol.h"
 #include "components/components.h"
+#include "state/sd_logger.h"
 
 namespace biopayload {
 
@@ -29,6 +30,8 @@ void StateMachine::transitionTo(State next) {
   if (next == current_) return;
   current_ = next;
   protocol::state(stateName(current_));
+  // Mirror every state transition to the SD event log (no-op if card absent).
+  sdLogger::logEvent(stateName(current_));
 }
 
 void StateMachine::tick(uint32_t /*now_ms*/) {
@@ -43,6 +46,9 @@ bool StateMachine::abort() {
   // and the operator hits ABORT, we still need the pump to drop.
   dispatcher::clearPending();
   components::abortAll();
+  sdLogger::logEvent("ABORT");
+  // Close any open scan file so data is flushed cleanly.
+  sdLogger::endScan();
   if (current_ == State::IDLE) return false;
   transitionTo(State::IDLE);
   return true;

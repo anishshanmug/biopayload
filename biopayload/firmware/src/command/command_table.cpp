@@ -57,6 +57,11 @@ void hSpecAtime  (const ParsedCmd&);
 void hSpecAstep  (const ParsedCmd&);
 void hSpecStatus (const ParsedCmd&);
 
+// SD card
+void hSdStatus (const ParsedCmd&);
+void hSdList   (const ParsedCmd&);
+void hSdDelete (const ParsedCmd&);
+
 }  // namespace handlers
 
 const CommandEntry kCommandTable[] = {
@@ -98,6 +103,11 @@ const CommandEntry kCommandTable[] = {
     { "SPEC_ATIME",  &handlers::hSpecAtime,  MASK_IDLE_ONLY },
     { "SPEC_ASTEP",  &handlers::hSpecAstep,  MASK_IDLE_ONLY },
     { "SPEC_STATUS", &handlers::hSpecStatus, MASK_ALL },
+
+    // SD card (status/list = read-only, delete = IDLE-only)
+    { "SD_STATUS", &handlers::hSdStatus, MASK_ALL },
+    { "SD_LIST",   &handlers::hSdList,   MASK_ALL },
+    { "SD_DELETE", &handlers::hSdDelete, MASK_IDLE_ONLY },
 };
 
 const size_t kCommandTableSize = sizeof(kCommandTable) / sizeof(kCommandTable[0]);

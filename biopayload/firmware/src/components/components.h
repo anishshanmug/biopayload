@@ -19,6 +19,7 @@
 #include "components/linear_actuator.h"
 #include "components/peristaltic_pump.h"
 #include "components/rgb_led.h"
+#include "components/sd_card.h"
 #include "components/spectral_sensor.h"
 
 namespace biopayload {
@@ -32,6 +33,7 @@ extern ::components::LinearActuator  motor;
 extern ::components::RGBLed          led;
 extern ::components::LimitSwitch     limit;
 extern ::components::SpectralSensor  spec;
+extern ::components::SDCard          sd;
 
 // Initialise every component. Prints a per-component status line so the
 // operator sees presence detection at boot. Always returns true (a missing
