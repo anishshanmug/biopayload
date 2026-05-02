@@ -5,6 +5,8 @@ BioPayload Command Center
 Full-featured ground station GUI for the BioPayload ESP32 firmware (Phase 2).
 Exposes every 1st-order command from COMMAND_REFERENCE.md, plus:
   - Live dual-line chart: 590 nm (f6) and 630 nm (f7) spectral channels
+  - Continuous-stream mode: fires SPEC_READ back-to-back for calibration
+  - Hover tooltip on the graph showing motor position at each datapoint
   - Live SYS_STATUS display, auto-polled every 2 s
   - Live motor position display, auto-polled every 1 s
   - Raw serial console (all RX / TX lines)
@@ -160,6 +162,7 @@ class CommandGUI:
         "rx":       "#c3e88d",
         "c590":     "#ff6f00",   # orange  – 590 nm line
         "c630":     "#ce93d8",   # lilac   – 630 nm line
+        "cclr":     "#4dd0e1",   # cyan    – clear channel line
         "graph_bg": "#1a1a2e",
         "graph_gd": "#2a2a3e",
         "pos_bar":  "#29b6f6",
@@ -184,9 +187,19 @@ class CommandGUI:
         self._motor_pos  = 0
 
         # Spectral data buffers for live graph
-        self._ts  : deque[float] = deque(maxlen=self.MAX_PTS)
-        self._d590: deque[float] = deque(maxlen=self.MAX_PTS)
-        self._d630: deque[float] = deque(maxlen=self.MAX_PTS)
+        self._ts    : deque[float] = deque(maxlen=self.MAX_PTS)
+        self._d590  : deque[float] = deque(maxlen=self.MAX_PTS)
+        self._d630  : deque[float] = deque(maxlen=self.MAX_PTS)
+        self._dclr  : deque[float] = deque(maxlen=self.MAX_PTS)
+        self._pos_at: deque[int]   = deque(maxlen=self.MAX_PTS)  # motor pos per sample
+
+        # Continuous-stream mode
+        self._streaming        = False
+        self._stream_after: Optional[str] = None  # scheduled next-read after ID
+
+        # Hover tooltip state
+        self._hover_idx: Optional[int] = None
+        self._last_hover_ms = 0.0
 
         self._sys_after: Optional[str] = None
         self._pos_after: Optional[str] = None
@@ -349,6 +362,7 @@ class CommandGUI:
 
     def _toggle_conn(self):
         if self.board.connected:
+            self._stop_stream()
             self._stop_poll()
             self.board.disconnect()
             self._connected = False
@@ -410,11 +424,23 @@ class CommandGUI:
                        command=lambda c=cmd: self._send(c)).pack(
                            side=tk.LEFT, expand=True, fill=tk.X, padx=2)
 
-        # MOT_STATUS / MOT_POS
+        # MOT_INTERVAL <us>
         row4 = ttk.Frame(p, style="Panel.TFrame")
-        row4.pack(fill=tk.X)
+        row4.pack(fill=tk.X, pady=(0, 4))
+        ttk.Label(row4, text="Interval (µs):", style="Dim.TLabel").pack(side=tk.LEFT)
+        self._mot_interval = tk.StringVar(value="120")
+        ttk.Entry(row4, textvariable=self._mot_interval,
+                  width=7, font=("Consolas", 10)).pack(side=tk.LEFT, padx=(6, 6))
+        ttk.Button(row4, text="SET", style="Small.TButton",
+                   command=lambda: self._send(
+                       f"MOT_INTERVAL {self._mot_interval.get().strip()}")).pack(side=tk.LEFT)
+        ttk.Label(row4, text="(10–100000)", style="Dim.TLabel").pack(side=tk.LEFT, padx=(6, 0))
+
+        # MOT_STATUS / MOT_POS
+        row5 = ttk.Frame(p, style="Panel.TFrame")
+        row5.pack(fill=tk.X)
         for cmd in ("MOT_STATUS", "MOT_POS"):
-            ttk.Button(row4, text=cmd, style="Small.TButton",
+            ttk.Button(row5, text=cmd, style="Small.TButton",
                        command=lambda c=cmd: self._send(c)).pack(
                            side=tk.LEFT, expand=True, fill=tk.X, padx=2)
 
@@ -599,11 +625,11 @@ class CommandGUI:
         p = ttk.Frame(container, style="Panel.TFrame", padding=10)
         p.pack(fill=tk.BOTH, expand=True)
 
-        ttk.Label(p, text="Live Spectral — 590 nm & 630 nm",
+        ttk.Label(p, text="Live Spectral — 590 nm, 630 nm & Clear",
                   style="Title.TLabel").pack(anchor=tk.W, pady=(0, 6))
 
         toolbar = ttk.Frame(p, style="Panel.TFrame")
-        toolbar.pack(fill=tk.X, pady=(0, 6))
+        toolbar.pack(fill=tk.X, pady=(0, 4))
 
         self._lbl590 = tk.Label(toolbar, text="590 nm: --",
                                 bg=self.C["panel"], fg=self.C["c590"],
@@ -613,18 +639,42 @@ class CommandGUI:
         self._lbl630 = tk.Label(toolbar, text="630 nm: --",
                                 bg=self.C["panel"], fg=self.C["c630"],
                                 font=("Consolas", 12, "bold"))
-        self._lbl630.pack(side=tk.LEFT)
+        self._lbl630.pack(side=tk.LEFT, padx=(0, 20))
 
+        self._lblclr = tk.Label(toolbar, text="Clear: --",
+                                bg=self.C["panel"], fg=self.C["cclr"],
+                                font=("Consolas", 12, "bold"))
+        self._lblclr.pack(side=tk.LEFT, padx=(0, 20))
+
+        self._lbl_n = tk.Label(toolbar, text="n=0",
+                               bg=self.C["panel"], fg=self.C["dim"],
+                               font=("Consolas", 10))
+        self._lbl_n.pack(side=tk.LEFT)
+
+        # Right-side buttons
+        ttk.Button(toolbar, text="Clear", style="Small.TButton",
+                   command=self._clear_graph).pack(side=tk.RIGHT, padx=(4, 0))
         ttk.Button(toolbar, text="SPEC_READ", style="Small.TButton",
-                   command=lambda: self._send("SPEC_READ")).pack(side=tk.RIGHT, padx=(6, 0))
-        ttk.Button(toolbar, text="Clear Graph", style="Small.TButton",
-                   command=self._clear_graph).pack(side=tk.RIGHT)
+                   command=lambda: self._send("SPEC_READ")).pack(side=tk.RIGHT, padx=(4, 0))
+
+        # Stream toggle button (styled separately so we can recolor it)
+        self._stream_btn = tk.Button(
+            toolbar, text="▶  Start Stream",
+            bg=self.C["accent"], fg=self.C["text"],
+            activebackground=self.C["border"],
+            font=("Helvetica", 9, "bold"),
+            padx=10, pady=3, relief=tk.FLAT, cursor="hand2",
+            command=self._toggle_stream)
+        self._stream_btn.pack(side=tk.RIGHT, padx=(0, 8))
 
         self._fig = Figure(figsize=(5, 3), dpi=100, facecolor=self.C["graph_bg"])
         self._ax  = self._fig.add_subplot(111)
         self._style_ax()
         self._fig_canvas = FigureCanvasTkAgg(self._fig, master=p)
         self._fig_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+        # Connect hover event for tooltip
+        self._fig_canvas.mpl_connect("motion_notify_event", self._on_hover)
 
     def _style_ax(self):
         ax, C = self._ax, self.C
@@ -636,39 +686,115 @@ class CommandGUI:
             sp.set_color(C["graph_gd"])
         ax.grid(True, color=C["graph_gd"], linewidth=0.4, alpha=0.6)
 
+    # ---- streaming ----------------------------------------------------------
+
+    def _toggle_stream(self):
+        if self._streaming:
+            self._stop_stream()
+        else:
+            if not self.board.connected:
+                self._log("Not connected", "warning")
+                return
+            self._streaming = True
+            self._stream_btn.configure(
+                text="■  Stop Stream",
+                bg="#b71c1c", fg="white", activebackground="#d32f2f")
+            self._log("Spectral stream started", "success")
+            self._send("SPEC_READ")
+
+    def _stop_stream(self):
+        self._streaming = False
+        if self._stream_after:
+            self.root.after_cancel(self._stream_after)
+            self._stream_after = None
+        if hasattr(self, "_stream_btn"):
+            self._stream_btn.configure(
+                text="▶  Start Stream",
+                bg=self.C["accent"], fg=self.C["text"],
+                activebackground=self.C["border"])
+
+    # ---- data push & graph --------------------------------------------------
+
     def _push_telem(self, data: dict):
         if self._start_time is None:
             self._start_time = time.time()
         t   = time.time() - self._start_time
         v59 = data.get("f6", 0)
         v63 = data.get("f7", 0)
+        vcl = data.get("clear", 0)
         self._ts.append(t)
         self._d590.append(v59)
         self._d630.append(v63)
+        self._dclr.append(vcl)
+        self._pos_at.append(self._motor_pos)   # snapshot position at this sample
         self._lbl590.configure(text=f"590 nm: {v59}")
         self._lbl630.configure(text=f"630 nm: {v63}")
+        self._lblclr.configure(text=f"Clear: {vcl}")
+        self._lbl_n.configure(text=f"n={len(self._ts)}")
         self._redraw_graph()
+        # Fire next read if streaming (small delay lets the ESP32 dispatcher breathe)
+        if self._streaming and self.board.connected:
+            self._stream_after = self.root.after(
+                30, lambda: self._send("SPEC_READ") if self._streaming else None)
 
     def _redraw_graph(self):
         ax, C = self._ax, self.C
         ax.cla()
         self._style_ax()
+        xs = y59 = y63 = ycl = []
         if self._ts:
             xs  = list(self._ts)
             y59 = list(self._d590)
             y63 = list(self._d630)
+            ycl = list(self._dclr)
             ax.plot(xs, y59, color=C["c590"], linewidth=1.4, label="590 nm")
             ax.fill_between(xs, y59, color=C["c590"], alpha=0.08)
             ax.plot(xs, y63, color=C["c630"], linewidth=1.4, label="630 nm")
             ax.fill_between(xs, y63, color=C["c630"], alpha=0.08)
+            ax.plot(xs, ycl, color=C["cclr"], linewidth=1.2, label="Clear", linestyle="--")
             ax.legend(fontsize=8, facecolor=C["graph_bg"],
                       labelcolor=C["dim"], framealpha=0.7)
-            all_v = y59 + y63
+            all_v = y59 + y63 + ycl
             lo, hi = max(0, min(all_v) - 50), max(all_v) + 50
             if lo == hi:
                 lo -= 50
                 hi += 50
             ax.set_ylim(lo, hi)
+
+        # Hover annotation
+        idx = self._hover_idx
+        if idx is not None and xs and 0 <= idx < len(xs):
+            hx   = xs[idx]
+            hy59 = y59[idx]
+            hy63 = y63[idx]
+            hycl = ycl[idx] if idx < len(ycl) else "?"
+            hpos = list(self._pos_at)[idx] if idx < len(self._pos_at) else "?"
+            # Vertical cursor line
+            ax.axvline(hx, color=C["dim"], linewidth=0.8, linestyle="--", alpha=0.6)
+            # Dot markers on each line
+            ax.plot(hx, hy59, "o", color=C["c590"], markersize=6, zorder=5)
+            ax.plot(hx, hy63, "o", color=C["c630"], markersize=6, zorder=5)
+            ax.plot(hx, hycl, "o", color=C["cclr"],  markersize=6, zorder=5)
+            # Annotation box — flip side if near right edge
+            ax_w = ax.get_xlim()[1] - ax.get_xlim()[0] if ax.get_xlim()[1] != ax.get_xlim()[0] else 1
+            x_frac = (hx - ax.get_xlim()[0]) / ax_w if ax_w else 0.5
+            x_offset = -120 if x_frac > 0.75 else 12
+            y_anchor = max(hy59, hy63, hycl) if isinstance(hycl, (int, float)) else max(hy59, hy63)
+            ax.annotate(
+                f"t = {hx:.2f} s\n590 = {hy59}\n630 = {hy63}\nclr = {hycl}\npos = {hpos} steps",
+                xy=(hx, y_anchor),
+                xytext=(x_offset, 8),
+                textcoords="offset points",
+                color=C["text"],
+                fontsize=8,
+                bbox=dict(boxstyle="round,pad=0.4",
+                          facecolor=C["panel"],
+                          edgecolor=C["border"],
+                          alpha=0.92),
+                arrowprops=dict(arrowstyle="->", color=C["dim"], lw=0.8),
+                zorder=10,
+            )
+
         self._fig.tight_layout(pad=0.8)
         self._fig_canvas.draw_idle()
 
@@ -676,9 +802,40 @@ class CommandGUI:
         self._ts.clear()
         self._d590.clear()
         self._d630.clear()
+        self._dclr.clear()
+        self._pos_at.clear()
+        self._hover_idx = None
         self._redraw_graph()
         self._lbl590.configure(text="590 nm: --")
         self._lbl630.configure(text="630 nm: --")
+        self._lblclr.configure(text="Clear: --")
+        self._lbl_n.configure(text="n=0")
+
+    # ---- hover tooltip ------------------------------------------------------
+
+    def _on_hover(self, event):
+        """Update hover annotation when mouse moves over the axes."""
+        if not event.inaxes or not self._ts:
+            if self._hover_idx is not None:
+                self._hover_idx = None
+                self._redraw_graph()
+            return
+
+        xs = list(self._ts)
+        # Find nearest sample by x distance
+        new_idx = min(range(len(xs)), key=lambda i: abs(xs[i] - event.xdata))
+
+        if new_idx == self._hover_idx:
+            return   # same point — nothing to do
+
+        self._hover_idx = new_idx
+
+        # Throttle redraws to ~30 fps so hovering stays responsive during streaming
+        now_ms = time.time() * 1000
+        if now_ms - self._last_hover_ms < 33:
+            return
+        self._last_hover_ms = now_ms
+        self._redraw_graph()
 
     # -------------------------------------------------------------------------
     # Right panel: Live system status + motor position
@@ -863,6 +1020,7 @@ class CommandGUI:
             if aid:
                 self.root.after_cancel(aid)
                 setattr(self, attr, None)
+        self._stop_stream()
 
     def _poll_sys(self):
         if self._connected and self.board.connected:
@@ -921,6 +1079,12 @@ class CommandGUI:
         telem = parse_telem(line)
         if telem is not None:
             self._push_telem(telem)
+            return
+
+        # ERR during streaming → stop stream so we don't loop forever
+        if line.startswith("ERR") and self._streaming:
+            self._stop_stream()
+            self._log("Stream stopped due to error", "warning")
             return
 
         # LIM_STATUS → update limit label

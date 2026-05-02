@@ -33,14 +33,15 @@ void hPumpOff    (const ParsedCmd&);
 void hPumpStatus (const ParsedCmd&);
 
 // Motor
-void hMotMove    (const ParsedCmd&);
-void hMotRun     (const ParsedCmd&);
-void hMotStop    (const ParsedCmd&);
-void hMotHome    (const ParsedCmd&);
-void hMotPos     (const ParsedCmd&);
-void hMotEnable  (const ParsedCmd&);
-void hMotDisable (const ParsedCmd&);
-void hMotStatus  (const ParsedCmd&);
+void hMotMove     (const ParsedCmd&);
+void hMotRun      (const ParsedCmd&);
+void hMotStop     (const ParsedCmd&);
+void hMotHome     (const ParsedCmd&);
+void hMotPos      (const ParsedCmd&);
+void hMotEnable   (const ParsedCmd&);
+void hMotDisable  (const ParsedCmd&);
+void hMotStatus   (const ParsedCmd&);
+void hMotInterval (const ParsedCmd&);
 
 // LED
 void hLedSet    (const ParsedCmd&);
@@ -79,14 +80,15 @@ const CommandEntry kCommandTable[] = {
     { "PUMP_STATUS", &handlers::hPumpStatus, MASK_ALL },
 
     // Motor (writes are IDLE-only)
-    { "MOT_MOVE",    &handlers::hMotMove,    MASK_IDLE_ONLY },
-    { "MOT_RUN",     &handlers::hMotRun,     MASK_IDLE_ONLY },
-    { "MOT_STOP",    &handlers::hMotStop,    MASK_IDLE_ONLY },
-    { "MOT_HOME",    &handlers::hMotHome,    MASK_IDLE_ONLY },
-    { "MOT_POS",     &handlers::hMotPos,     MASK_ALL },
-    { "MOT_ENABLE",  &handlers::hMotEnable,  MASK_IDLE_ONLY },
-    { "MOT_DISABLE", &handlers::hMotDisable, MASK_IDLE_ONLY },
-    { "MOT_STATUS",  &handlers::hMotStatus,  MASK_ALL },
+    { "MOT_MOVE",     &handlers::hMotMove,     MASK_IDLE_ONLY },
+    { "MOT_RUN",      &handlers::hMotRun,      MASK_IDLE_ONLY },
+    { "MOT_STOP",     &handlers::hMotStop,     MASK_IDLE_ONLY },
+    { "MOT_HOME",     &handlers::hMotHome,     MASK_IDLE_ONLY },
+    { "MOT_POS",      &handlers::hMotPos,      MASK_ALL },
+    { "MOT_ENABLE",   &handlers::hMotEnable,   MASK_IDLE_ONLY },
+    { "MOT_DISABLE",  &handlers::hMotDisable,  MASK_IDLE_ONLY },
+    { "MOT_STATUS",   &handlers::hMotStatus,   MASK_ALL },
+    { "MOT_INTERVAL", &handlers::hMotInterval, MASK_ALL },
 
     // LED (writes are IDLE-only)
     { "LED_SET",    &handlers::hLedSet,    MASK_IDLE_ONLY },

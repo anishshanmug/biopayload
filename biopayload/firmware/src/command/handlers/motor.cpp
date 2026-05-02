@@ -10,6 +10,7 @@
 //   MOT_ENABLE           ACK MOT_ENABLE
 //   MOT_DISABLE          ACK MOT_DISABLE
 //   MOT_STATUS           MOT_STATUS IDLE|MOVING|HOMING
+//   MOT_INTERVAL <us>    ACK MOT_INTERVAL  (10..100000 µs; takes effect immediately) default is 120
 
 #include <Arduino.h>
 #include <string.h>
@@ -109,6 +110,20 @@ void hMotStatus(const ParsedCmd&) {
     case ::components::LinearActuator::Status::MOVING: Serial.println(F("MOVING")); break;
     case ::components::LinearActuator::Status::HOMING: Serial.println(F("HOMING")); break;
   }
+}
+
+void hMotInterval(const ParsedCmd& cmd) {
+  if (cmd.argc != 1) {
+    protocol::err("BAD_ARG", "MOT_INTERVAL <us>");
+    return;
+  }
+  long us;
+  if (!parseLong(cmd.argv[0], &us) || us < 10 || us > 100000) {
+    protocol::err("BAD_ARG", "us must be 10..100000");
+    return;
+  }
+  components::motor.setStepIntervalUs(static_cast<unsigned long>(us));
+  protocol::ack("MOT_INTERVAL");
 }
 
 }  // namespace handlers

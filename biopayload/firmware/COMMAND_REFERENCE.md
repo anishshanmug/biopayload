@@ -103,6 +103,7 @@ in any state.
 | `MOT_ENABLE` | `ACK MOT_ENABLE` | IDLE | Assert driver EN (hold torque) |
 | `MOT_DISABLE` | `ACK MOT_DISABLE` | IDLE | Release driver EN |
 | `MOT_STATUS` | `MOT_STATUS IDLE \| MOVING \| HOMING` | any | Query motor state |
+| `MOT_INTERVAL <us>` | `ACK MOT_INTERVAL` | any | Set step pulse interval in µs (10–100000; default 120). Takes effect immediately, even mid-move. Lower = faster; TMC2208 stall risk below ~80 µs. |
 
 ### Limit switch
 
