@@ -15,7 +15,7 @@
 namespace biopayload {
 namespace handlers {
 
-constexpr const char* FIRMWARE_VERSION = "0.1.0";
+constexpr const char* FIRMWARE_VERSION = "0.2.0";
 
 void hPing(const ParsedCmd& /*cmd*/) {
   protocol::ack("PING");

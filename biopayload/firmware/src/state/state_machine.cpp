@@ -3,6 +3,7 @@
 #include "command/dispatcher.h"
 #include "command/protocol.h"
 #include "components/components.h"
+#include "state/experiment.h"
 #include "state/sd_logger.h"
 
 namespace biopayload {
@@ -34,9 +35,12 @@ void StateMachine::transitionTo(State next) {
   sdLogger::logEvent(stateName(current_));
 }
 
-void StateMachine::tick(uint32_t /*now_ms*/) {
-  // Phase 3: experiment runtime steps here. Intentionally empty for now so
-  // that phase 1 builds and exercises only the dispatcher + ABORT path.
+void StateMachine::tick(uint32_t now_ms) {
+  // Drive the Phase 3 experiment runtime. It walks PRIMING / ACTIVE /
+  // SCANNING / DONE / ERROR by calling back into transitionTo(); IDLE / DONE
+  // / ERROR are no-ops on its side so the state machine is also safe to tick
+  // when no experiment is running.
+  experiment::tick(now_ms);
 }
 
 bool StateMachine::abort() {
@@ -46,6 +50,9 @@ bool StateMachine::abort() {
   // and the operator hits ABORT, we still need the pump to drop.
   dispatcher::clearPending();
   components::abortAll();
+  // Reset the experiment runtime's cursors / sub-state. We deliberately keep
+  // the stored config so the operator can re-issue START without re-uploading.
+  experiment::onAbort();
   sdLogger::logEvent("ABORT");
   // Close any open scan file so data is flushed cleanly.
   sdLogger::endScan();

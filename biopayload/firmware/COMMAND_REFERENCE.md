@@ -25,11 +25,13 @@ Common error codes:
 | `BAD_ARG` | Wrong arity or out-of-range argument |
 | `BAD_STATE` | Command not allowed in the current state machine state |
 | `UNKNOWN` | Command name not in the registry |
-| `LINE_TOO_LONG` | Input line exceeded the 256-byte buffer |
+| `LINE_TOO_LONG` | Input line exceeded the 1 KB buffer |
 | `PENDING_FULL` | Too many in-flight async DONEs (max 4) |
 | `NO_SENSOR` | Spectral sensor not detected on I²C |
 | `READ_FAIL` | Spectral read returned no data |
 | `HOME_TIMEOUT` | `MOT_HOME` didn't see the limit switch close in time |
+| `BAD_CONFIG` | `SET_CONFIG` JSON failed validation; the second word names the field |
+| `NO_CONFIG` | `START` issued before any `SET_CONFIG` |
 
 ### Async DONE pattern
 
@@ -142,12 +144,92 @@ in any state.
 | `SYS_STATUS` | `SYS_STATUS pump:… motor:… led:… limit:… spec:… sd:… state:…` | any | One-line snapshot of every component + state |
 | `ABORT` | `ACK ABORT` | any | Emergency stop: clears pending DONEs, drives all components off, closes open SD files, returns to IDLE |
 
+### Experiment control (Phase 3)
+
+| Command | Response | States | Description |
+|---------|----------|--------|-------------|
+| `SET_CONFIG {json}` | `ACK SET_CONFIG` or `ERR BAD_CONFIG <field>` | IDLE | Upload an experiment description. The JSON payload follows the schema below; on parse / validation failure the second word of the ERR names the offending field. |
+| `CLEAR_CONFIG` | `ACK CLEAR_CONFIG` | IDLE | Drop the stored experiment description. Useful for standalone runtime tests and for recovering to a known "no config loaded" state without rebooting the MCU. |
+| `START` | `ACK START` then `STATE PRIMING` … `RESULT {…}` `STATE IDLE` | IDLE | Begin running the stored config. Errors with `ERR NO_CONFIG` if no config is loaded, or `ERR BAD_STATE START` if a run is already in progress. |
+
+After `START`, the firmware drives the experiment autonomously and emits the
+following over the wire:
+
+```text
+ACK START
+STATE PRIMING                   # pump runs for priming.pump_ms
+STATE ACTIVE                    # scheduled actions begin firing
+STATE SCANNING                  # SCAN_ALL_WELLS triggered
+TELEM {"event":"well","row":0,"col":0,"f1":...,"nir":...}
+TELEM {"event":"well","row":0,"col":1,...}
+STATE ACTIVE                    # back to ACTIVE between scans
+... (more scheduled fires) ...
+STATE DONE
+RESULT {"run_id":"demo","status":"OK","scans":2,"wells":4,"duration_ms":8123}
+STATE IDLE
+```
+
+`ABORT` at any point during a run is honored: the runtime closes the scan
+CSV, drives all components off, and returns to IDLE without emitting RESULT.
+
+#### `SET_CONFIG` JSON schema
+
+```json
+{
+  "run_id": "demo-001",
+  "priming": { "pump_ms": 1000 },
+  "active": {
+    "duration_ms": 8000,
+    "scheduled": [
+      { "cmd": "DISPENSE",       "every_ms": 4000, "pump_ms": 500 },
+      { "cmd": "SCAN_ALL_WELLS", "every_ms": 3000 }
+    ]
+  },
+  "scanning": {
+    "homing": false,
+    "settle_ms": 200,
+    "led_off_after_read": true,
+    "wells": [
+      { "row": 0, "col": 0, "steps_from_home": 0,    "led": [255, 0, 0] },
+      { "row": 0, "col": 1, "steps_from_home": 1200, "led": [255, 0, 0] }
+    ]
+  }
+}
+```
+
+| Field | Type | Range | Notes |
+|---|---|---|---|
+| `run_id` | string | 1–31 chars | Required. Echoed back in `RESULT`. |
+| `priming.pump_ms` | uint | 0–600 000 | Pump prime duration. `0` skips PRIMING. |
+| `active.duration_ms` | uint | 0–86 400 000 | Total ACTIVE phase length. `0` skips straight to DONE. |
+| `active.scheduled` | array | 0–4 entries | Periodic actions fired during ACTIVE. |
+| `active.scheduled[].cmd` | string | `DISPENSE` \| `SCAN_ALL_WELLS` | |
+| `active.scheduled[].every_ms` | uint | 1–86 400 000 | Period between fires; first fire is `every_ms` after ACTIVE entry. |
+| `active.scheduled[].pump_ms` | uint | 1–600 000 | Required iff `cmd == DISPENSE`. |
+| `scanning.homing` | bool | — | If `true`, SCANNING starts with a `MOT_HOME`. Set `false` for pre-wiring tests. Default `true`. |
+| `scanning.settle_ms` | uint | 0–60 000 | Wait between LED-on and `SPEC_READ` per well. |
+| `scanning.led_off_after_read` | bool | — | Default `true`. |
+| `scanning.wells` | array | 0–12 entries | Empty array makes SCAN_ALL_WELLS a no-op (returns straight to ACTIVE). |
+| `scanning.wells[].row` / `.col` | uint | row 0–7, col 0–11 | |
+| `scanning.wells[].steps_from_home` | int | ±1 000 000 | Absolute target position; runtime computes `MOT_MOVE` delta from the current `motor.position()`. |
+| `scanning.wells[].led` | `[r, g, b]` | each 0–255 | LED color for this well. |
+
+The maximum line length the dispatcher will accept is 1 KB, which fits a
+12-well config with comfortable margin.
+
+If `SD_STATUS` is `READY`, every run also writes:
+- one `--- exp NNN ---` separator line to `/events.log`
+- one CSV row per well reading to `/exp_NNN/scan.csv`
+
 ---
 
 ## 2nd Order Commands — Orchestrator
 
-These commands are **sequences of 1st order commands** that will be executed
-by the firmware-side experiment runtime (Phase 3) given a JSON config.
+These are the **sequences of 1st order commands** that the firmware-side
+experiment runtime executes internally during `START` (Phase 3). They are not
+directly callable over the wire — the runtime drives them based on the
+`SET_CONFIG` payload — but they are documented here for reference because the
+TELEM / RESULT trace they produce is the host's main view of a run.
 
 ### `PRIME_LINES`
 

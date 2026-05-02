@@ -1,7 +1,8 @@
-// Central registry of all wire-protocol commands. Phase 2 adds all the
+// Central registry of all wire-protocol commands. Phase 2 adds the
 // component-specific handlers (PUMP_*, MOT_*, SPEC_*, LED_*, LIM_*) plus the
-// SYS_STATUS roll-up. Experiment control commands (SET_CONFIG, START) come
-// in Phase 3.
+// SYS_STATUS roll-up. Phase 3 adds the experiment control commands
+// (SET_CONFIG, START) which sit on top of the experiment runtime in
+// state/experiment.{h,cpp}.
 //
 // State-mask convention:
 //   MASK_ALL        - read-only / always-safe commands (status, ABORT, etc.)
@@ -63,6 +64,11 @@ void hSdStatus (const ParsedCmd&);
 void hSdList   (const ParsedCmd&);
 void hSdDelete (const ParsedCmd&);
 
+// Experiment control (Phase 3)
+void hSetConfig (const ParsedCmd&);
+void hClearConfig(const ParsedCmd&);
+void hStart     (const ParsedCmd&);
+
 }  // namespace handlers
 
 const CommandEntry kCommandTable[] = {
@@ -110,6 +116,12 @@ const CommandEntry kCommandTable[] = {
     { "SD_STATUS", &handlers::hSdStatus, MASK_ALL },
     { "SD_LIST",   &handlers::hSdList,   MASK_ALL },
     { "SD_DELETE", &handlers::hSdDelete, MASK_IDLE_ONLY },
+
+    // Experiment control: configure + kick off an autonomous run. SET_CONFIG
+    // is also IDLE-only so it can't race a running experiment.
+    { "SET_CONFIG",    &handlers::hSetConfig,    MASK_IDLE_ONLY },
+    { "CLEAR_CONFIG",  &handlers::hClearConfig,  MASK_IDLE_ONLY },
+    { "START",         &handlers::hStart,        MASK_IDLE_ONLY },
 };
 
 const size_t kCommandTableSize = sizeof(kCommandTable) / sizeof(kCommandTable[0]);

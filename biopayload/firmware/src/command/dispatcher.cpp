@@ -11,7 +11,10 @@ namespace biopayload {
 namespace dispatcher {
 namespace {
 
-constexpr size_t LINE_BUF_SIZE = 256;
+// 1 KB is comfortable for a 12-well SET_CONFIG payload (~750 B for the wells
+// alone) with margin for run_id, scheduled actions, and whitespace. ESP32
+// SRAM is plentiful so this is essentially free.
+constexpr size_t LINE_BUF_SIZE = 1024;
 constexpr size_t PENDING_MAX   = 4;
 
 char     g_line[LINE_BUF_SIZE];

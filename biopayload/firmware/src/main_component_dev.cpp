@@ -1,15 +1,16 @@
 /**
  * BioPayload firmware entry point (Arduino Nano ESP32).
  *
- * Phase 2 of the rework: state machine + dispatcher + every 1st-order
- * component command (PUMP_*, MOT_*, LED_*, LIM_*, SPEC_*) plus the SYS_STATUS
- * cross-component roll-up. The experiment runtime (Phase 3) plugs in via the
- * stateMachine.tick() callout.
+ * Phase 3 of the rework: state machine + dispatcher + 1st-order component
+ * commands (PUMP_*, MOT_*, LED_*, LIM_*, SPEC_*) + cross-component
+ * SYS_STATUS, plus the experiment runtime that walks PRIMING / ACTIVE /
+ * SCANNING / DONE autonomously when given a JSON config via SET_CONFIG +
+ * START.
  *
  * Wire protocol: see biopayload/firmware/COMMAND_REFERENCE.md.
  *   - 115200 8N1 over USB CDC
  *   - newline-delimited (\n) commands in, ACK / DONE / ERR / STATE / TELEM /
- *     SYS_STATUS responses out
+ *     RESULT / SYS_STATUS responses out
  *
  * The legacy single-character well-plate scan demo lives in
  * `main_demo_legacy.cpp`, excluded from build.
@@ -35,7 +36,7 @@ void setup() {
   delay(500);
 
   Serial.println();
-  Serial.println(F("BioPayload firmware booting (phase 2: component handlers online)"));
+  Serial.println(F("BioPayload firmware booting (phase 3: experiment runtime online)"));
 
   // Per-component init. Prints `[boot] pump on pin 8 OK`, etc., so the
   // operator sees presence detection (real for I2C devices, "pin set up
@@ -44,7 +45,8 @@ void setup() {
 
   biopayload::stateMachine.begin();
 
-  Serial.println(F("Ready. Try: HELLO, SYS_STATUS, PUMP_RUN 250, LED_SET 64 0 0."));
+  Serial.println(F("Ready. Try: HELLO, SYS_STATUS, PUMP_RUN 250, LED_SET 64 0 0,"));
+  Serial.println(F("            SET_CONFIG {\"run_id\":\"demo\",...}, START."));
 }
 
 void loop() {
