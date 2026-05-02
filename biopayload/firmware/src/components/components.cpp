@@ -28,7 +28,7 @@ constexpr int LED_R = A1;
 constexpr int LED_G = A0;
 constexpr int LED_B = A2;
 
-constexpr int LIMIT = D6;
+constexpr int LIMIT = D12;
 
 // SD card: dedicated HSPI instance so it doesn't conflict with the default SPI
 // bus or the I2C bus. Matches the legacy demo pinout.
@@ -45,7 +45,7 @@ constexpr int SD_MOSI = D8;
 ::components::PeristalticPump pump (pins::PUMP);
 ::components::LinearActuator  motor(pins::MOTOR_STEP, pins::MOTOR_DIR, pins::MOTOR_EN);
 ::components::RGBLed          led  (pins::LED_R, pins::LED_G, pins::LED_B);
-::components::LimitSwitch     limit(pins::LIMIT);
+::components::LimitSwitch     limit(pins::LIMIT, HIGH); //set default as high because wiring is flipped
 ::components::SpectralSensor  spec;  // I2C, default address 0x39
 ::components::SDCard          sd(pins::SD_CS, pins::SD_CLK, pins::SD_MISO, pins::SD_MOSI);
 
@@ -84,6 +84,7 @@ bool beginAll() {
 
   // Motor (GPIO out * 3)
   motor.begin();
+  motor.setPostHomeSteps(9333);  // travel 9333 more steps in reverse after switch closes
   Serial.print(F("[boot] motor on (STEP=")); Serial.print(pins::MOTOR_STEP);
   Serial.print(F(",DIR=")); Serial.print(pins::MOTOR_DIR);
   Serial.print(F(",EN=")); Serial.print(pins::MOTOR_EN);
@@ -131,7 +132,12 @@ bool beginAll() {
 void tickAll() {
   pump.update();
   motor.update();
-  // LED, limit, spec, and sd have no async state to tick.
+  // Poll limit switch for debounced edge; emit a notification on any transition.
+  limit.read();
+  if (limit.consumeChange()) {
+    Serial.print(F("LIM_CHANGE "));
+    Serial.println(limit.closedLatched() ? F("CLOSED") : F("OPEN"));
+  }
 }
 
 void abortAll() {

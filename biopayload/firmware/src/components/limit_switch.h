@@ -25,7 +25,7 @@ namespace components {
 
 class LimitSwitch {
  public:
-  static constexpr int      DEFAULT_PIN     = D6;
+  static constexpr int      DEFAULT_PIN     = D12;
   static constexpr uint16_t DEBOUNCE_MS     = 5;
 
   LimitSwitch(int pin = DEFAULT_PIN, uint8_t closedLevel = LOW)
@@ -33,8 +33,9 @@ class LimitSwitch {
 
   bool begin() {
     pinMode(pin_, INPUT_PULLUP);
-    raw_         = digitalRead(pin_);
-    stable_      = raw_;
+    raw_          = digitalRead(pin_);
+    stable_       = raw_;
+    prevStable_   = raw_;
     lastChangeMs_ = millis();
     return true;
   }
@@ -50,7 +51,9 @@ class LimitSwitch {
       lastChangeMs_ = millis();
     }
     if (level != stable_ && (millis() - lastChangeMs_) >= DEBOUNCE_MS) {
-      stable_ = level;
+      prevStable_ = stable_;
+      stable_     = level;
+      changed_    = true;
     }
     return stable_;
   }
@@ -62,6 +65,14 @@ class LimitSwitch {
   // Cheap accessor for the last debounced state without another digitalRead.
   bool closedLatched() const { return stable_ == closedLevel_; }
 
+  // Returns true (once) after a debounced open↔close transition. Clears the
+  // flag on read — call this each loop iteration via tickAll().
+  bool consumeChange() {
+    if (!changed_) return false;
+    changed_ = false;
+    return true;
+  }
+
   int pin() const { return pin_; }
 
  private:
@@ -69,6 +80,8 @@ class LimitSwitch {
   uint8_t       closedLevel_;
   uint8_t       raw_           = HIGH;
   uint8_t       stable_        = HIGH;
+  uint8_t       prevStable_    = HIGH;
+  bool          changed_       = false;
   unsigned long lastChangeMs_  = 0;
 };
 

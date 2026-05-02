@@ -14,16 +14,19 @@
 // Modes (visible via status()):
 //   IDLE     - no motion in progress
 //   MOVING   - executing startMoveSteps() / startContinuous()
-//   HOMING   - executing startHome(); self-completes on switch close or
-//              timeout. On timeout, homeFailed() goes true and the caller
-//              (e.g. the MOT_HOME pending-DONE check) is responsible for
-//              emitting `ERR HOME_TIMEOUT` and clearing the flag.
+//   HOMING   - executing startHome(); two-phase sequence:
+//                Phase 1: reverse continuously until limit switch closes.
+//                Phase 2: if postHomeSteps_ > 0, continue reverse for that
+//                         many more steps (post-home travel to the true zero
+//                         reference, e.g. flush with back wall). Status stays
+//                         HOMING throughout so the dispatcher sees one async op.
+//              On completion pos_ = 0. On timeout (phase 1 only), homeFailed()
+//              goes true and the caller emits `ERR HOME_TIMEOUT`.
 //
 // Position semantics: pos_ is a signed step counter relative to the most
 // recent successful home. Forward steps increment it, reverse steps
-// decrement. During HOMING the counter is NOT updated (it'll be zeroed on
-// success); homed() returns false until at least one home has succeeded, so
-// hosts shouldn't trust position() until then.
+// decrement. During HOMING the counter is NOT updated (zeroed on success);
+// homed() returns false until at least one home has succeeded.
 //
 // Driver enable convention: TMC2208's EN pin is active-LOW. Constructor
 // accepts -1 for `enPin` if EN is hard-tied to GND on the board.
@@ -42,7 +45,7 @@ class LinearActuator {
   static constexpr int           DEFAULT_PIN_DIR         = 2;
   static constexpr int           DEFAULT_PIN_EN          = 3;
   static constexpr unsigned long DEFAULT_STEP_INTERVAL_US = 120;
-  static constexpr unsigned long DEFAULT_HOME_TIMEOUT_MS  = 5000;
+  static constexpr unsigned long DEFAULT_HOME_TIMEOUT_MS  = 20000;
 
   LinearActuator(int stepPin = DEFAULT_PIN_STEP,
                  int dirPin  = DEFAULT_PIN_DIR,
@@ -107,10 +110,11 @@ class LinearActuator {
     remainingSteps_   = 0;
     abort_requested_  = false;
     lastStepUs_       = micros();
-    homingSwitch_     = &sw;
-    homingDeadlineMs_ = millis() + timeoutMs;
-    homeFailed_       = false;
-    status_           = Status::HOMING;
+    homingSwitch_      = &sw;
+    homingDeadlineMs_  = millis() + timeoutMs;
+    homeFailed_        = false;
+    postHomeTraveling_ = false;
+    status_            = Status::HOMING;
   }
 
   // Cooperative stop. Halts at next update(). Does NOT toggle enable.
@@ -127,19 +131,32 @@ class LinearActuator {
     }
 
     if (status_ == Status::HOMING) {
-      if (homingSwitch_ && homingSwitch_->closed()) {
-        stopMotion_();
-        pos_    = 0;
-        homed_  = true;
-        status_ = Status::IDLE;
-        return;
+      if (!postHomeTraveling_) {
+        // Phase 1: seek the switch.
+        if (homingSwitch_ && homingSwitch_->closed()) {
+          homingSwitch_ = nullptr;  // stop polling switch
+          if (postHomeSteps_ > 0) {
+            // Transition to phase 2: pos_ starts at the offset and counts
+            // down to 0 as the stage travels the remaining distance.
+            pos_               = static_cast<long>(postHomeSteps_);
+            continuous_        = false;
+            remainingSteps_    = postHomeSteps_;
+            postHomeTraveling_ = true;
+          } else {
+            stopMotion_();
+            pos_    = 0;
+            homed_  = true;
+            status_ = Status::IDLE;
+            return;
+          }
+        } else if (static_cast<long>(millis() - homingDeadlineMs_) >= 0) {
+          stopMotion_();
+          homeFailed_ = true;
+          status_     = Status::IDLE;
+          return;
+        }
       }
-      if (static_cast<long>(millis() - homingDeadlineMs_) >= 0) {
-        stopMotion_();
-        homeFailed_ = true;
-        status_     = Status::IDLE;
-        return;
-      }
+      // Phase 2 completion is handled below in the !continuous_ block.
     }
 
     unsigned long now = micros();
@@ -148,14 +165,20 @@ class LinearActuator {
 
     pulseStep_();
 
-    // Position counter ticks for MOVING (bounded or continuous), but stays
-    // put during HOMING -- it'll be zeroed when the switch hits.
-    if (status_ != Status::HOMING) {
+    // Position counter ticks for MOVING and during post-home travel (phase 2),
+    // but stays put during the switch-seek phase (phase 1 of HOMING).
+    if (status_ != Status::HOMING || postHomeTraveling_) {
       pos_ += forward_ ? 1 : -1;
     }
 
     if (!continuous_) {
       if (--remainingSteps_ == 0) {
+        if (postHomeTraveling_) {
+          // Phase 2 complete: we are now at the true zero reference.
+          postHomeTraveling_ = false;
+          pos_   = 0;
+          homed_ = true;
+        }
         stopMotion_();
         status_ = Status::IDLE;
       }
@@ -171,6 +194,12 @@ class LinearActuator {
   void          setStepIntervalUs(unsigned long us) { stepIntervalUs_ = us; }
   unsigned long stepIntervalUs() const { return stepIntervalUs_; }
 
+  // Extra reverse steps to travel after the switch closes before zeroing pos_.
+  // Set to 9333 to make the back wall (9333 steps past the switch) position 0.
+  // Default 0 means switch position = zero (no post-home travel).
+  void          setPostHomeSteps(unsigned long steps) { postHomeSteps_ = steps; }
+  unsigned long postHomeSteps() const                 { return postHomeSteps_; }
+
  private:
   void pulseStep_() {
     digitalWrite(pinStep_, HIGH);
@@ -182,10 +211,11 @@ class LinearActuator {
     enabled_ = en;
   }
   void stopMotion_() {
-    continuous_       = false;
-    remainingSteps_   = 0;
-    homingSwitch_     = nullptr;
-    abort_requested_  = false;
+    continuous_        = false;
+    remainingSteps_    = 0;
+    homingSwitch_      = nullptr;
+    postHomeTraveling_ = false;
+    abort_requested_   = false;
   }
 
   int           pinStep_;
@@ -202,8 +232,10 @@ class LinearActuator {
   bool          continuous_       = false;
   bool          abort_requested_  = false;
 
-  long          pos_              = 0;
-  unsigned long remainingSteps_   = 0;
+  long          pos_               = 0;
+  unsigned long remainingSteps_    = 0;
+  unsigned long postHomeSteps_     = 0;
+  bool          postHomeTraveling_ = false;
 
   LimitSwitch*  homingSwitch_     = nullptr;
   unsigned long homingDeadlineMs_ = 0;
