@@ -845,6 +845,12 @@ def main() -> int:
 
         return suite.summary()
     finally:
+        # Safety stop: kill any running motor/pump/LED regardless of test outcome.
+        try:
+            bus.send("ABORT")
+            time.sleep(0.3)
+        except Exception:
+            pass
         bus.close()
 
 

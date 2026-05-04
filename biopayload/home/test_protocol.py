@@ -42,7 +42,7 @@ except ImportError:  # pragma: no cover
 
 DEFAULT_BAUD = 115200
 DEFAULT_TIMEOUT = 2.0
-HOME_TIMEOUT = 8.0  # MOT_HOME deadline + slack
+HOME_TIMEOUT = 95.0  # MOT_HOME deadline (firmware 90 s) + 5 s slack
 
 
 # --------------------------------------------------------------------------- #
@@ -88,7 +88,12 @@ class SerialBus:
 
     def _drain(self) -> None:
         """Pull whatever's in the OS receive buffer into ``_rx`` and split
-        completed lines into ``_pending``."""
+        completed lines into ``_pending``.
+
+        Heartbeat lines (``HB <ms>``) are USB-CDC keep-alive emitted every 15 s
+        by the firmware. Drop them at the bus layer so they never appear in
+        test traces or log windows.
+        """
         while True:
             chunk = self.ser.read(256)
             if not chunk:
@@ -97,6 +102,8 @@ class SerialBus:
         while b"\n" in self._rx:
             line, _, self._rx = self._rx.partition(b"\n")
             text = line.decode("ascii", errors="replace").rstrip("\r")
+            if text.startswith("HB "):
+                continue
             self._pending.append(text)
             self.log.append(f"<- {text}")
 
@@ -404,14 +411,24 @@ def t_spec_read(s: Suite) -> None:
         s.bus.send("SPEC_READ")
         s.bus.expect(
             lambda l: l == "ERR NO_SENSOR",
-            description="ERR NO_SENSOR",
+            description="ERR NO_SENSOR (no sensor)",
         )
         return
+    # SPEC_READ is now async: ACK → TELEM → DONE SPEC_READ
     s.bus.send("SPEC_READ")
+    s.bus.expect(
+        lambda l: l == "ACK SPEC_READ",
+        description="ACK SPEC_READ",
+    )
     s.bus.expect(
         lambda l: l.startswith("TELEM {") and "f1" in l and "nir" in l,
         timeout=3.0,
         description="TELEM {...}",
+    )
+    s.bus.expect(
+        lambda l: l == "DONE SPEC_READ",
+        timeout=2.0,
+        description="DONE SPEC_READ",
     )
 
 
@@ -594,6 +611,11 @@ def main() -> int:
 
         return suite.summary()
     finally:
+        try:
+            bus.send("ABORT")
+            time.sleep(0.3)
+        except Exception:
+            pass
         bus.close()
 
 
