@@ -44,15 +44,16 @@ enum class ScanStep : uint8_t {
   ADVANCE  = 5,
 };
 
-bool             g_hasConfig      = false;
-ExperimentConfig g_cfg            = {};
-uint32_t         g_activeStartMs  = 0;
-ScanStep         g_scanStep       = ScanStep::IDLE;
-uint8_t          g_scanWellIdx    = 0;
-uint32_t         g_settleStartMs  = 0;
-uint16_t         g_scansThisRun   = 0;
+bool             g_hasConfig        = false;
+ExperimentConfig g_cfg              = {};
+uint32_t         g_activeStartMs    = 0;
+ScanStep         g_scanStep         = ScanStep::IDLE;
+uint8_t          g_scanWellIdx      = 0;
+uint32_t         g_settleStartMs    = 0;
+uint16_t         g_scansThisRun     = 0;
 uint16_t         g_wellReadsThisRun = 0;
-uint32_t         g_runStartMs     = 0;
+uint32_t         g_runStartMs       = 0;
+bool             g_needScanInit     = false;
 
 void writeErr(char* err, size_t errSize, const char* field) {
   if (!err || errSize == 0) return;
@@ -306,6 +307,7 @@ void resetRuntime() {
   g_scansThisRun     = 0;
   g_wellReadsThisRun = 0;
   g_runStartMs       = 0;
+  g_needScanInit     = false;
 }
 
 // ---------------------------------------------------------------------------
@@ -524,13 +526,20 @@ bool start() {
   if (!g_hasConfig) return false;
   if (stateMachine.current() != State::IDLE) return false;
   resetRuntime();
-  uint16_t expId = sdLogger::beginScan();
-  (void)expId;  // SD card may be absent; runtime continues either way.
+  g_needScanInit = true;
   enterPriming(millis());
   return true;
 }
 
 void tick(uint32_t now_ms) {
+  // Deferred SD init: beginScan() does heavy I/O (listDir, mkdir, open,
+  // write header, flush) that can block for seconds. Running it here in
+  // tick() — outside dispatcher::poll() — keeps the command pipeline
+  // responsive so ABORT / CLEAR_CONFIG are never stuck behind SD I/O.
+  if (g_needScanInit) {
+    g_needScanInit = false;
+    sdLogger::beginScan();
+  }
   switch (stateMachine.current()) {
     case State::PRIMING:  tickPriming(now_ms);  break;
     case State::ACTIVE:   tickActive(now_ms);   break;

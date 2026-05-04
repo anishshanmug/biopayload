@@ -84,7 +84,7 @@ bool beginAll() {
 
   // Motor (GPIO out * 3)
   motor.begin();
-  motor.setPostHomeSteps(9333);  // travel 9333 more steps in reverse after switch closes
+  motor.setPostHomeSteps(9600);  // travel 9600 more steps in reverse after switch closes
   Serial.print(F("[boot] motor on (STEP=")); Serial.print(pins::MOTOR_STEP);
   Serial.print(F(",DIR=")); Serial.print(pins::MOTOR_DIR);
   Serial.print(F(",EN=")); Serial.print(pins::MOTOR_EN);
