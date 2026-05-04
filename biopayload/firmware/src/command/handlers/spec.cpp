@@ -8,13 +8,26 @@
 //   SPEC_ASTEP <0..65535>  ACK  SPEC_ASTEP
 //   SPEC_STATUS            SPEC_STATUS READY|NOT_FOUND
 //
-// SPEC_READ is intentionally synchronous: the AS7341 read loop completes in a
-// few hundred ms which we accept as a controlled hiccup of the dispatcher
-// loop. Long-running spectral routines belong in scheduled actions (Phase 3),
-// not in a 1st-order command.
+// SPEC_READ is asynchronous: the handler starts the FreeRTOS-backed read task,
+// emits ACK immediately, and registers a pending DoneCheck callback. The
+// dispatcher polls the callback every loop() iteration. When the sensor task
+// finishes, the callback emits TELEM and returns DONE; if the read times out
+// or the I2C bus gets stuck, the callback emits ERR READ_TIMEOUT and returns
+// FAILED. The main loop is never blocked.
+//
+// Wire trace:
+//   -> SPEC_READ
+//   <- ACK SPEC_READ          (immediate)
+//   <- TELEM {"f1":...}       (up to 1 s later)
+//   <- DONE SPEC_READ
+//
+// Hardware note: 100nF + 10µF decoupling on AS7341 VCC, 4.7kΩ I2C pullups
+// to 3.3V, and routing I2C away from motor/pump wiring significantly reduce
+// the probability of a stuck-bus condition.
 
 #include <Arduino.h>
 
+#include "command/dispatcher.h"
 #include "command/parser.h"
 #include "command/protocol.h"
 #include "components/components.h"
@@ -23,6 +36,10 @@ namespace biopayload {
 namespace handlers {
 
 namespace {
+
+// Persistent reading buffer: outlives a single hSpecRead() call so the
+// DoneCheck callback can emit it after the handler returns.
+::components::SpectralReading g_specReading;
 
 void emitReadingTelem(const ::components::SpectralReading& r) {
   protocol::telemBegin();
@@ -39,22 +56,38 @@ void emitReadingTelem(const ::components::SpectralReading& r) {
   protocol::telemEnd();
 }
 
+// DoneCheck callback: polled by dispatcher every loop(). Non-blocking.
+dispatcher::DoneResult specReadDone(void* /*ctx*/) {
+  using R = ::components::SpectralSensor::ReadResult;
+  R result = components::spec.pollRead();
+  switch (result) {
+    case R::DONE:
+      emitReadingTelem(g_specReading);
+      return dispatcher::DoneResult::DONE;
+    case R::FAILED:
+      protocol::err("READ_TIMEOUT");
+      return dispatcher::DoneResult::FAILED;
+    case R::PENDING:
+    default:
+      return dispatcher::DoneResult::PENDING;
+  }
+}
+
 }  // namespace
 
 void hSpecRead(const ParsedCmd&) {
   if (!components::spec.isReady()) {
-    // Try a recovery probe in case the sensor was wired in after boot.
     if (!components::spec.tryReconnect()) {
       protocol::err("NO_SENSOR");
       return;
     }
   }
-  ::components::SpectralReading r;
-  if (!components::spec.read(r)) {
+  if (!components::spec.startRead(&g_specReading)) {
     protocol::err("READ_FAIL");
     return;
   }
-  emitReadingTelem(r);
+  protocol::ack("SPEC_READ");
+  dispatcher::registerPending("SPEC_READ", specReadDone);
 }
 
 void hSpecGain(const ParsedCmd& cmd) {

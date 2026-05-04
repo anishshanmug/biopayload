@@ -87,7 +87,7 @@ in any state.
 
 | Command | Response | States | Description |
 |---------|----------|--------|-------------|
-| `SPEC_READ` | `TELEM { f1, f2, …, f8, clear, nir }` | any | Read all 10 channels (synchronous, ~250 ms; `ERR NO_SENSOR` / `ERR READ_FAIL` on failure) |
+| `SPEC_READ` | `ACK SPEC_READ` then async `TELEM { f1, f2, …, f8, clear, nir }` then `DONE SPEC_READ` | any | Start a non-blocking 10-channel read. ACK is immediate; TELEM arrives up to 1 s later when the ADC finishes. `ERR NO_SENSOR` if sensor absent; `ERR READ_TIMEOUT` if I2C stalls (I2C recovery runs automatically; after 3 consecutive failures the sensor is marked NOT_FOUND until `SPEC_STATUS` reconnects it). |
 | `SPEC_GAIN <0..10>` | `ACK SPEC_GAIN` | IDLE | 0=0.5×, 1=1×, 2=2×, … 10=512× |
 | `SPEC_ATIME <0..255>` | `ACK SPEC_ATIME` | IDLE | Integration step count |
 | `SPEC_ASTEP <0..65535>` | `ACK SPEC_ASTEP` | IDLE | Integration step time |

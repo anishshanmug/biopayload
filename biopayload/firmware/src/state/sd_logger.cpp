@@ -10,7 +10,6 @@ namespace sdLogger {
 
 namespace {
 
-File  g_eventFile;         // /events.log -- kept open for the session
 File  g_scanFile;          // /exp_NNN/scan.csv -- open only during an experiment
 uint16_t g_expId = 0;      // current experiment id; 0 = none open
 
@@ -30,12 +29,14 @@ uint16_t nextExpId() {
 }
 
 void writeEventLine(const char* msg) {
-  if (!g_eventFile) return;
-  g_eventFile.print(F("T="));
-  g_eventFile.print(millis());
-  g_eventFile.print(' ');
-  g_eventFile.println(msg);
-  g_eventFile.flush();
+  if (!components::sd.present()) return;
+  File eventFile = components::sd.openAppend("/events.log");
+  if (!eventFile) return;
+  eventFile.print(F("T="));
+  eventFile.print(millis());
+  eventFile.print(' ');
+  eventFile.println(msg);
+  eventFile.close();
 }
 
 }  // namespace
@@ -46,10 +47,10 @@ void writeEventLine(const char* msg) {
 
 void begin() {
   if (!components::sd.present()) return;
-  g_eventFile = components::sd.openAppend("/events.log");
-  if (!g_eventFile) return;
-  // Version separator so multiple boot sessions are distinguishable.
-  g_eventFile.println(F("--- BOOT ---"));
+  File eventFile = components::sd.openAppend("/events.log");
+  if (!eventFile) return;
+  eventFile.println(F("--- BOOT ---"));
+  eventFile.close();
   writeEventLine("BOOT 0.1.0");
 }
 

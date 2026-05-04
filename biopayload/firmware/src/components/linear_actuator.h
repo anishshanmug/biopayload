@@ -52,7 +52,7 @@ class LinearActuator {
   static constexpr int           DEFAULT_PIN_DIR          = 2;
   static constexpr int           DEFAULT_PIN_EN           = 3;
   static constexpr unsigned long DEFAULT_STEP_INTERVAL_US = 120;
-  static constexpr unsigned long DEFAULT_HOME_TIMEOUT_MS  = 20000;
+  static constexpr unsigned long DEFAULT_HOME_TIMEOUT_MS  = 90000;  // 90 s for full-travel homing
 
   LinearActuator(int stepPin = DEFAULT_PIN_STEP,
                  int dirPin  = DEFAULT_PIN_DIR,

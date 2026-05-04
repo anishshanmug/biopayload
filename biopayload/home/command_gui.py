@@ -46,25 +46,41 @@ def get_serial_ports() -> list[str]:
 
 
 class BoardSerial:
-    """Background-reader serial wrapper (mirrors wellplate_gui.py pattern)."""
+    """Background-reader serial wrapper with liveness tracking.
 
-    def __init__(self, on_line, baudrate: int = 115200):
-        self.on_line  = on_line
-        self.baudrate = baudrate
+    Tracks the last time data was received from the board.  The GUI polls
+    ``seconds_since_rx()`` and can trigger a reconnect when the board
+    disappears (e.g. native-USB re-enumeration after a watchdog reset).
+    """
+
+    def __init__(self, on_line, on_disconnect=None, baudrate: int = 115200):
+        self.on_line       = on_line
+        self.on_disconnect = on_disconnect
+        self.baudrate      = baudrate
+        self.port: Optional[str] = None
         self._ser: Optional[serial.Serial] = None
         self._running = False
         self._thread: Optional[threading.Thread] = None
+        self._last_rx: float = 0.0
 
     @property
     def connected(self) -> bool:
         return self._ser is not None and self._ser.is_open
 
+    def seconds_since_rx(self) -> float:
+        if self._last_rx == 0.0:
+            return 0.0
+        return time.time() - self._last_rx
+
     def connect(self, port: str) -> bool:
         try:
-            self._ser = serial.Serial(port, self.baudrate, timeout=0.1)
+            self._ser = serial.Serial(port, self.baudrate, timeout=0.1,
+                                      write_timeout=1.0)
             time.sleep(2)
             self._ser.reset_input_buffer()
+            self.port = port
             self._running = True
+            self._last_rx = time.time()
             self._thread = threading.Thread(target=self._read_loop, daemon=True)
             self._thread.start()
             return True
@@ -77,7 +93,10 @@ class BoardSerial:
         if self._thread:
             self._thread.join(timeout=1.0)
         if self._ser and self._ser.is_open:
-            self._ser.close()
+            try:
+                self._ser.close()
+            except Exception:
+                pass
         self._ser = None
 
     def send(self, cmd: str):
@@ -86,15 +105,17 @@ class BoardSerial:
         try:
             line = (cmd + "\n") if not cmd.endswith("\n") else cmd
             self._ser.write(line.encode())
-        except serial.SerialException:
-            pass
+        except (serial.SerialException, OSError):
+            self._flag_dead()
 
     def _read_loop(self):
         buf = ""
         while self._running and self._ser and self._ser.is_open:
             try:
                 if self._ser.in_waiting:
-                    buf += self._ser.read(self._ser.in_waiting).decode("utf-8", errors="ignore")
+                    chunk = self._ser.read(self._ser.in_waiting).decode("utf-8", errors="ignore")
+                    self._last_rx = time.time()
+                    buf += chunk
                     while "\n" in buf:
                         line, buf = buf.split("\n", 1)
                         line = line.strip()
@@ -102,8 +123,14 @@ class BoardSerial:
                             self.on_line(line)
                 else:
                     time.sleep(0.01)
-            except serial.SerialException:
+            except (serial.SerialException, OSError):
                 break
+        self._flag_dead()
+
+    def _flag_dead(self):
+        if self.on_disconnect and self._running:
+            self._running = False
+            self.on_disconnect()
 
 
 # ---------------------------------------------------------------------------
@@ -181,10 +208,12 @@ class CommandGUI:
         root.minsize(1120, 780)
         root.configure(bg=self.C["bg"])
 
-        self.board       = BoardSerial(self._on_line)
+        self.board       = BoardSerial(self._on_line,
+                                       on_disconnect=self._on_serial_lost)
         self._connected  = False
         self._start_time: Optional[float] = None
         self._motor_pos  = 0
+        self._last_sys: dict = {}
 
         # Spectral data buffers for live graph
         self._ts    : deque[float] = deque(maxlen=self.MAX_PTS)
@@ -203,6 +232,7 @@ class CommandGUI:
 
         self._sys_after: Optional[str] = None
         self._pos_after: Optional[str] = None
+        self._liveness_after: Optional[str] = None
 
         self._setup_styles()
         self._build_ui()
@@ -252,8 +282,8 @@ class CommandGUI:
         # Right: graph / status / console (grid with weights)
         right = ttk.Frame(body, style="Dark.TFrame")
         right.grid(row=0, column=1, sticky="nsew")
-        right.rowconfigure(0, weight=4)   # graph  – most space
-        right.rowconfigure(1, weight=1)   # status – compact
+        right.rowconfigure(0, weight=5)   # graph — gets extra space when status hidden
+        right.rowconfigure(1, weight=0)   # status — fixed height, collapsible
         right.rowconfigure(2, weight=2)   # console
         right.columnconfigure(0, weight=1)
 
@@ -654,6 +684,12 @@ class CommandGUI:
         # Right-side buttons
         ttk.Button(toolbar, text="Clear", style="Small.TButton",
                    command=self._clear_graph).pack(side=tk.RIGHT, padx=(4, 0))
+        ttk.Button(toolbar, text="Reset View", style="Small.TButton",
+                   command=self._reset_graph_view).pack(side=tk.RIGHT, padx=(4, 0))
+        ttk.Button(toolbar, text="Zoom Out", style="Small.TButton",
+                   command=lambda: self._zoom_graph(1.4)).pack(side=tk.RIGHT, padx=(4, 0))
+        ttk.Button(toolbar, text="Zoom In", style="Small.TButton",
+                   command=lambda: self._zoom_graph(0.7)).pack(side=tk.RIGHT, padx=(4, 0))
         ttk.Button(toolbar, text="SPEC_READ", style="Small.TButton",
                    command=lambda: self._send("SPEC_READ")).pack(side=tk.RIGHT, padx=(4, 0))
 
@@ -672,6 +708,10 @@ class CommandGUI:
         self._style_ax()
         self._fig_canvas = FigureCanvasTkAgg(self._fig, master=p)
         self._fig_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+        # Track whether the user has manually panned/zoomed so live redraws
+        # don't fight the user's view.
+        self._user_zoomed = False  # True when user has panned/zoomed manually
 
         # Connect hover event for tooltip
         self._fig_canvas.mpl_connect("motion_notify_event", self._on_hover)
@@ -732,13 +772,39 @@ class CommandGUI:
         self._lblclr.configure(text=f"Clear: {vcl}")
         self._lbl_n.configure(text=f"n={len(self._ts)}")
         self._redraw_graph()
-        # Fire next read if streaming (small delay lets the ESP32 dispatcher breathe)
-        if self._streaming and self.board.connected:
-            self._stream_after = self.root.after(
-                30, lambda: self._send("SPEC_READ") if self._streaming else None)
+        # SPEC_READ is now async (ACK → TELEM → DONE SPEC_READ).
+        # The next read is fired when DONE SPEC_READ arrives, not here,
+        # so we don't queue a second read while the first is still in flight.
+
+    def _zoom_graph(self, factor: float):
+        """Zoom both axes around the current view center."""
+        if not self._ts:
+            return
+        x0, x1 = self._ax.get_xlim()
+        y0, y1 = self._ax.get_ylim()
+        if x0 == x1 or y0 == y1:
+            return
+
+        cx = (x0 + x1) / 2
+        cy = (y0 + y1) / 2
+        half_w = (x1 - x0) * factor / 2
+        half_h = (y1 - y0) * factor / 2
+
+        self._ax.set_xlim(cx - half_w, cx + half_w)
+        self._ax.set_ylim(cy - half_h, cy + half_h)
+        self._user_zoomed = True
+        self._fig_canvas.draw_idle()
+
+    def _reset_graph_view(self):
+        """Return to automatic graph scaling."""
+        self._user_zoomed = False
+        self._redraw_graph()
 
     def _redraw_graph(self):
         ax, C = self._ax, self.C
+        # Preserve view limits if the user has zoomed/panned.
+        saved_xlim = ax.get_xlim() if self._user_zoomed else None
+        saved_ylim = ax.get_ylim() if self._user_zoomed else None
         ax.cla()
         self._style_ax()
         xs = y59 = y63 = ycl = []
@@ -754,12 +820,13 @@ class CommandGUI:
             ax.plot(xs, ycl, color=C["cclr"], linewidth=1.2, label="Clear", linestyle="--")
             ax.legend(fontsize=8, facecolor=C["graph_bg"],
                       labelcolor=C["dim"], framealpha=0.7)
-            all_v = y59 + y63 + ycl
-            lo, hi = max(0, min(all_v) - 50), max(all_v) + 50
-            if lo == hi:
-                lo -= 50
-                hi += 50
-            ax.set_ylim(lo, hi)
+            if not self._user_zoomed:
+                all_v = y59 + y63 + ycl
+                lo, hi = max(0, min(all_v) - 50), max(all_v) + 50
+                if lo == hi:
+                    lo -= 50
+                    hi += 50
+                ax.set_ylim(lo, hi)
 
         # Hover annotation
         idx = self._hover_idx
@@ -795,6 +862,10 @@ class CommandGUI:
                 zorder=10,
             )
 
+        if self._user_zoomed and saved_xlim and saved_ylim:
+            ax.set_xlim(saved_xlim)
+            ax.set_ylim(saved_ylim)
+
         self._fig.tight_layout(pad=0.8)
         self._fig_canvas.draw_idle()
 
@@ -805,7 +876,7 @@ class CommandGUI:
         self._dclr.clear()
         self._pos_at.clear()
         self._hover_idx = None
-        self._redraw_graph()
+        self._reset_graph_view()
         self._lbl590.configure(text="590 nm: --")
         self._lbl630.configure(text="630 nm: --")
         self._lblclr.configure(text="Clear: --")
@@ -842,112 +913,58 @@ class CommandGUI:
     # -------------------------------------------------------------------------
 
     def _build_status_panel(self, parent):
-        container = ttk.Frame(parent, style="Dark.TFrame")
-        container.grid(row=1, column=0, sticky="nsew", pady=(0, 8))
-        p = ttk.Frame(container, style="Panel.TFrame", padding=10)
-        p.pack(fill=tk.BOTH, expand=True)
+        self._status_container = ttk.Frame(parent, style="Dark.TFrame")
+        self._status_container.grid(row=1, column=0, sticky="ew", pady=(0, 4))
 
-        ttk.Label(p, text="Live System Status  (auto-updates every 1–2 s)",
-                  style="Title.TLabel").pack(anchor=tk.W, pady=(0, 8))
+        # Toggle button
+        self._status_visible = False
+        self._status_toggle_btn = tk.Button(
+            self._status_container, text="▶ System Status",
+            bg=self.C["accent"], fg=self.C["dim"], bd=0,
+            activebackground=self.C["border"], activeforeground=self.C["text"],
+            font=("Consolas", 10), anchor=tk.W, padx=6, pady=2,
+            command=self._toggle_status_panel)
+        self._status_toggle_btn.pack(fill=tk.X)
 
-        top = ttk.Frame(p, style="Panel.TFrame")
-        top.pack(fill=tk.X, pady=(0, 8))
+        # Collapsible body
+        self._status_body = ttk.Frame(self._status_container, style="Panel.TFrame", padding=(10, 6))
+        # Starts hidden
 
-        # State
-        state_box = ttk.Frame(top, style="Panel.TFrame")
-        state_box.pack(side=tk.LEFT, padx=(0, 24))
-        ttk.Label(state_box, text="STATE", style="Dim.TLabel").pack(anchor=tk.W)
-        self._state_lbl = tk.Label(state_box, text="--",
-                                   bg=self.C["panel"], fg=self.C["dim"],
-                                   font=("Helvetica", 22, "bold"))
-        self._state_lbl.pack(anchor=tk.W)
+        # Single text label: shows all SYS_STATUS fields + MOT_POS in one line
+        self._status_text_lbl = tk.Label(
+            self._status_body, text="--",
+            bg=self.C["panel"], fg=self.C["dim"],
+            font=("Consolas", 10), anchor=tk.W, justify=tk.LEFT)
+        self._status_text_lbl.pack(fill=tk.X)
 
-        # Motor position (large number)
-        pos_box = ttk.Frame(top, style="Panel.TFrame")
-        pos_box.pack(side=tk.LEFT, padx=(0, 24))
-        ttk.Label(pos_box, text="MOTOR POSITION (steps)", style="Dim.TLabel").pack(anchor=tk.W)
-        self._pos_lbl = tk.Label(pos_box, text="--",
-                                 bg=self.C["panel"], fg=self.C["pos_bar"],
-                                 font=("Consolas", 22, "bold"))
-        self._pos_lbl.pack(anchor=tk.W)
-
-        # Position bar (−5000 … +5000)
-        bar_box = ttk.Frame(top, style="Panel.TFrame")
-        bar_box.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        ttk.Label(bar_box, text="Position bar  (−5000 … +5000)",
-                  style="Dim.TLabel").pack(anchor=tk.W)
-        self._pos_canvas = tk.Canvas(bar_box, height=22,
-                                     bg=self.C["accent"], highlightthickness=0)
-        self._pos_canvas.pack(fill=tk.X, pady=(4, 0))
-        self._pos_canvas.bind("<Configure>", lambda _e: self._draw_pos_bar())
-
-        # Per-component indicators
-        comp_row = ttk.Frame(p, style="Panel.TFrame")
-        comp_row.pack(fill=tk.X)
         self._comp_lbls: dict[str, tk.Label] = {}
-        for name in ("pump", "motor", "led", "limit", "spec", "sd"):
-            box = ttk.Frame(comp_row, style="Panel.TFrame")
-            box.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=4)
-            ttk.Label(box, text=name.upper(), style="Dim.TLabel").pack()
-            lbl = tk.Label(box, text="--", bg=self.C["panel"], fg=self.C["dim"],
-                           font=("Consolas", 10, "bold"))
-            lbl.pack()
-            self._comp_lbls[name] = lbl
+
+    def _toggle_status_panel(self):
+        if self._status_visible:
+            self._status_body.pack_forget()
+            self._status_toggle_btn.configure(text="▶ System Status")
+            self._status_visible = False
+        else:
+            self._status_body.pack(fill=tk.X)
+            self._status_toggle_btn.configure(text="▼ System Status")
+            self._status_visible = True
 
     def _update_sys_status(self, data: dict):
-        state_fg = {
-            "IDLE":     self.C["dim"],
-            "PRIMING":  self.C["warning"],
-            "ACTIVE":   self.C["success"],
-            "SCANNING": "#29b6f6",
-            "DONE":     "#64b5f6",
-            "ERROR":    self.C["error"],
-        }
-        val_fg = {
-            "RUNNING":   self.C["success"],
-            "MOVING":    self.C["warning"],
-            "HOMING":    self.C["warning"],
-            "ON":        self.C["success"],
-            "CLOSED":    self.C["warning"],
-            "READY":     self.C["success"],
-            "IDLE":      self.C["dim"],
-            "OFF":       self.C["dim"],
-            "OPEN":      self.C["dim"],
-            "NOT_FOUND": self.C["error"],
-        }
-        state = data.get("state", "--")
-        self._state_lbl.configure(text=state,
-                                   fg=state_fg.get(state, self.C["text"]))
-        for name in ("pump", "motor", "led", "limit", "spec", "sd"):
-            val = data.get(name, "--")
-            self._comp_lbls[name].configure(
-                text=val, fg=val_fg.get(val, self.C["text"]))
+        self._last_sys = data
+        self._refresh_status_text()
 
     def _update_mot_pos(self, pos: int):
         self._motor_pos = pos
-        self._pos_lbl.configure(text=str(pos))
-        self._draw_pos_bar()
+        self._refresh_status_text()
 
-    def _draw_pos_bar(self):
-        w = self._pos_canvas.winfo_width()
-        if w <= 1:
-            return
-        self._pos_canvas.delete("all")
-        POS_MAX = 5000
-        frac = (self._motor_pos + POS_MAX) / (2 * POS_MAX)
-        frac = max(0.0, min(1.0, frac))
-        cx  = int(frac * w)
-        mid = w // 2
-        # Filled bar from centre to current position
-        self._pos_canvas.create_rectangle(
-            min(cx, mid), 1, max(cx, mid), 21,
-            fill=self.C["pos_bar"], outline="")
-        # Position marker
-        self._pos_canvas.create_rectangle(cx - 2, 0, cx + 2, 22,
-                                           fill="white", outline="")
-        # Centre tick
-        self._pos_canvas.create_rectangle(mid - 1, 0, mid + 1, 22,
-                                           fill=self.C["dim"], outline="")
+    def _refresh_status_text(self):
+        data = getattr(self, "_last_sys", {})
+        parts = []
+        parts.append(f"state:{data.get('state', '--')}")
+        parts.append(f"pos:{self._motor_pos}")
+        for name in ("pump", "motor", "led", "limit", "spec", "sd"):
+            parts.append(f"{name}:{data.get(name, '--')}")
+        self._status_text_lbl.configure(text="  ".join(parts))
 
     # -------------------------------------------------------------------------
     # Right panel: Serial console
@@ -1013,14 +1030,59 @@ class CommandGUI:
     def _start_poll(self):
         self._poll_sys()
         self._poll_pos()
+        self._liveness_after = self.root.after(5000, self._check_liveness)
 
     def _stop_poll(self):
-        for attr in ("_sys_after", "_pos_after"):
+        for attr in ("_sys_after", "_pos_after", "_liveness_after"):
             aid = getattr(self, attr, None)
             if aid:
                 self.root.after_cancel(aid)
                 setattr(self, attr, None)
         self._stop_stream()
+
+    def _check_liveness(self):
+        """Detect a dead serial connection (native USB re-enumeration, etc.)."""
+        if self._connected and self.board.seconds_since_rx() > 30:
+            self._log("No data from board for 30 s — reconnecting…", "warning")
+            self._attempt_reconnect()
+        if self._connected:
+            self._liveness_after = self.root.after(5000, self._check_liveness)
+
+    def _attempt_reconnect(self):
+        old_port = self.board.port
+        self._stop_stream()
+        self.board.disconnect()
+
+        # The native USB port may have re-enumerated under a new path.
+        available = get_serial_ports()
+        port = old_port if old_port in available else (available[0] if available else None)
+        if port and port != old_port:
+            self._log(f"Port changed: {old_port} → {port}", "warning")
+            self._port_var.set(port)
+
+        if port:
+            self._log(f"Reconnecting to {port}…", "info")
+            if self.board.connect(port):
+                self._conn_dot.configure(fg=self.C["success"])
+                self._log("Reconnected — sending HELLO", "success")
+                self._send("HELLO")
+                self._poll_sys()
+                self._poll_pos()
+                return
+        self._connected = False
+        self._conn_btn.configure(text="Connect")
+        self._conn_dot.configure(fg=self.C["error"])
+        self._log("Reconnect failed — click Connect to retry", "error")
+
+    def _on_serial_lost(self):
+        """Called from reader thread when the port dies."""
+        self.root.after(0, lambda: self._handle_serial_lost())
+
+    def _handle_serial_lost(self):
+        if not self._connected:
+            return
+        self._log("Serial port lost — attempting reconnect…", "warning")
+        self._attempt_reconnect()
 
     def _poll_sys(self):
         if self._connected and self.board.connected:
@@ -1058,6 +1120,12 @@ class CommandGUI:
         to avoid flooding the console during auto-polling.
         Everything else appears in the console.
         """
+        # Heartbeat: silent USB-CDC keep-alive emitted every 15 s by firmware.
+        # Drop without console clutter; presence in raw stream is the liveness
+        # signal — if heartbeats stop, firmware loop has stopped.
+        if line.startswith("HB "):
+            return
+
         sys_data = parse_sys_status(line)
         if sys_data is not None:
             self._update_sys_status(sys_data)
@@ -1081,6 +1149,17 @@ class CommandGUI:
             self._push_telem(telem)
             return
 
+        # ACK SPEC_READ → consume silently (don't flood console mid-stream)
+        if line == "ACK SPEC_READ":
+            return
+
+        # DONE SPEC_READ → fire next read if streaming
+        if line == "DONE SPEC_READ":
+            if self._streaming and self.board.connected:
+                self._stream_after = self.root.after(
+                    30, lambda: self._send("SPEC_READ") if self._streaming else None)
+            return
+
         # ERR during streaming → stop stream so we don't loop forever
         if line.startswith("ERR") and self._streaming:
             self._stop_stream()
@@ -1095,17 +1174,11 @@ class CommandGUI:
                 fg=self.C["warning"] if val == "CLOSED" else self.C["dim"])
             return
 
-        # STATE transition → also update the state label directly
+        # STATE transition → update the status text
         if line.startswith("STATE "):
             state = line[6:].strip()
-            fg_map = {"IDLE":     self.C["dim"],
-                      "PRIMING":  self.C["warning"],
-                      "ACTIVE":   self.C["success"],
-                      "SCANNING": "#29b6f6",
-                      "DONE":     "#64b5f6",
-                      "ERROR":    self.C["error"]}
-            self._state_lbl.configure(text=state,
-                                      fg=fg_map.get(state, self.C["text"]))
+            self._last_sys["state"] = state
+            self._refresh_status_text()
 
     # -------------------------------------------------------------------------
     # Logging helpers
