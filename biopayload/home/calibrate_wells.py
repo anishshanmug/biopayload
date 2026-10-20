@@ -33,6 +33,9 @@ Flags
                      sweep start so the full physical range is covered.
   --out FILE         Write readings to FILE (default: sweep_<timestamp>.csv)
   --led R G B        LED levels during sweep (default 128 128 128 white)
+  --gain N           AS7341 gain index 0..10 (0=0.5×, 1=1×, 2=2×, 3=4×,
+                     4=8×, 5=16×, 6=32×, 7=64×, 8=128×, 9=256×, 10=512×)
+                     Default 4 (8×). Use lower values if peaks are saturated.
   --boot-wait        Boot-wait seconds (default 2.5; use 0 if already running)
 """
 
@@ -251,8 +254,8 @@ def main() -> int:
                     help="steps between readings (default 500)")
     ap.add_argument("--start",     type=int, default=None,
                     help="start position in steps (default: -(post-home-steps))")
-    ap.add_argument("--end",       type=int, default=180000,
-                    help="end position in steps (default 180000)")
+    ap.add_argument("--end",       type=int, default=199000,
+                    help="end position in steps (default 199000)")
     ap.add_argument("--post-home-steps", type=int, default=9600,
                     dest="post_home_steps",
                     help="must match setPostHomeSteps() in components.cpp (default 9600)")
@@ -265,6 +268,8 @@ def main() -> int:
     ap.add_argument("--led",       type=int, nargs=3, default=[128, 128, 128],
                     metavar=("R","G","B"),
                     help="LED levels during sweep (default: 128 128 128 white)")
+    ap.add_argument("--gain",      type=int, default=4,
+                    help="AS7341 gain index 0-10 (default 4 = 8×)")
     ap.add_argument("--boot-wait", type=float, default=2.5, dest="boot_wait")
     args = ap.parse_args()
 
@@ -280,6 +285,14 @@ def main() -> int:
 
         bus.send("ABORT")
         bus.read_lines(0.5)
+
+        if not 0 <= args.gain <= 10:
+            print(f"ERROR: --gain must be 0..10, got {args.gain}", file=sys.stderr)
+            return 1
+        gain_labels = ["0.5×","1×","2×","4×","8×","16×","32×","64×","128×","256×","512×"]
+        print(f"Setting gain to index {args.gain} ({gain_labels[args.gain]}) …", end=" ", flush=True)
+        send_expect(bus, f"SPEC_GAIN {args.gain}", "ACK SPEC_GAIN")
+        print("done.")
 
         if not args.no_home:
             home_motor(bus)
@@ -338,9 +351,11 @@ def main() -> int:
         print("done.")
 
         # Plot
-        plot_sweep(rows, f"Coarse sweep (step={args.step})")
+        gain_labels = ["0.5×","1×","2×","4×","8×","16×","32×","64×","128×","256×","512×"]
+        gain_str = f"gain={gain_labels[args.gain]}"
+        plot_sweep(rows, f"Coarse sweep (step={args.step}, {gain_str})")
         if fine_rows:
-            plot_sweep(fine_rows, f"Fine sweep {args.fine[0]}–{args.fine[1]} (step={fine_step})")
+            plot_sweep(fine_rows, f"Fine sweep {args.fine[0]}–{args.fine[1]} (step={fine_step}, {gain_str})")
 
         return 0
 

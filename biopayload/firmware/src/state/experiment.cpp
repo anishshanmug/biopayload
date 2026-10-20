@@ -320,7 +320,9 @@ void enterActive(uint32_t now_ms, bool firstEntry) {
   if (firstEntry) {
     g_activeStartMs = now_ms;
     for (uint8_t i = 0; i < g_cfg.scheduledCount; ++i) {
-      g_cfg.scheduled[i].lastFiredMs = now_ms;
+      // Seed so the very first tick satisfies (now - last >= every), i.e.
+      // scheduled actions fire immediately on the first ACTIVE tick.
+      g_cfg.scheduled[i].lastFiredMs = now_ms - g_cfg.scheduled[i].everyMs;
     }
   }
   // Activedurationms == 0 with no scheduled work: nothing to do, finish.
@@ -436,19 +438,21 @@ void fireScheduled(uint8_t i, uint32_t now_ms) {
 }
 
 void tickActive(uint32_t now_ms) {
-  // Honor scheduled actions first; a SCAN_ALL_WELLS will transition us out of
-  // ACTIVE before the duration check runs again.
+  // Duration gate: if the experiment window has elapsed, finish immediately.
+  // This MUST run before the scheduler so a stale scheduled action can't
+  // extend the run past its configured duration.
+  if (g_cfg.activeDurationMs > 0 &&
+      now_ms - g_activeStartMs >= g_cfg.activeDurationMs) {
+    enterDone(now_ms, "OK");
+    return;
+  }
+
   for (uint8_t i = 0; i < g_cfg.scheduledCount; ++i) {
     ScheduledAction& s = g_cfg.scheduled[i];
     if (now_ms - s.lastFiredMs >= s.everyMs) {
       fireScheduled(i, now_ms);
-      // SCAN_ALL_WELLS may have just transitioned us out of ACTIVE -- bail
-      // before we touch any other scheduled entries this tick.
       if (stateMachine.current() != State::ACTIVE) return;
     }
-  }
-  if (now_ms - g_activeStartMs >= g_cfg.activeDurationMs) {
-    enterDone(now_ms, "OK");
   }
 }
 
